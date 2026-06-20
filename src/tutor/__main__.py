@@ -15,6 +15,21 @@ def _todo(milestone: str) -> int:
     return 0
 
 
+def _run_bot() -> int:
+    import asyncio
+
+    from tutor.bot.main import run_bot
+
+    try:
+        asyncio.run(run_bot())
+    except RuntimeError as exc:
+        print(f"[tutor] bot failed: {exc}")
+        return 1
+    except KeyboardInterrupt:
+        print("\n[tutor] bot stopped.")
+    return 0
+
+
 def _run_scrape() -> int:
     import asyncio
 
@@ -51,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
 
     match args.command:
         case "bot":
-            return _todo("M3")
+            return _run_bot()
         case "scheduler":
             return _todo("M5")
         case "scrape":

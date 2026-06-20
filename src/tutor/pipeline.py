@@ -55,21 +55,19 @@ async def build_evaluation(
     return quiz
 
 
-async def submit_answers(
-    svc: Services, content_id: int, user_id: int, answers: dict[int, int]
-) -> ReviewResult:
-    """Grade answers, export Anki cards, and mark the item REVIEWED."""
+async def finalize_review(svc: Services, content_id: int, user_id: int) -> ReviewResult:
+    """Grade from recorded attempts, export Anki cards, mark REVIEWED.
+
+    Derives the missed questions from the `attempt` table (the source of truth),
+    so it works whether answers were recorded one-by-one (interactive bot) or in
+    a batch. Idempotent: if already REVIEWED it does not re-transition.
+    """
     quiz = svc.repo.get_quiz(content_id, QuizKind.READING)
     if quiz is None:
         raise KeyError(f"no quiz for content_item {content_id}")
 
-    missed = []
-    for q in quiz.questions:
-        chosen = answers.get(q.id, -1)
-        ok = is_correct(q, chosen)
-        svc.repo.record_attempt(q.id, user_id, chosen, ok)
-        if not ok:
-            missed.append(q)
+    attempts = {a.quiz_question_id: a for a in svc.repo.attempts_for_content(content_id, user_id)}
+    missed = [q for q in quiz.questions if not (attempts.get(q.id) and attempts[q.id].is_correct)]
     correct = len(quiz.questions) - len(missed)
 
     content = svc.repo.get(content_id)
@@ -78,11 +76,29 @@ async def submit_answers(
     anki = await svc.anki.add_cards(svc.settings.anki_deck, cards)
     svc.repo.save_anki_cards(content_id, cards, svc.settings.anki_deck, anki.sink)
 
-    svc.repo.mark_reviewed(content_id)
+    if content.status != DeliveryStatus.REVIEWED:
+        svc.repo.mark_reviewed(content_id)
 
-    await svc.notifier.send(user_id, render_score(correct, len(quiz.questions)))
-    if anki.apkg_path:
-        await svc.notifier.send_file(
-            user_id, Path(anki.apkg_path), caption="🎴 Your Anki cards for today"
-        )
     return ReviewResult(content_id, correct, len(quiz.questions), anki)
+
+
+async def submit_answers(
+    svc: Services, content_id: int, user_id: int, answers: dict[int, int]
+) -> ReviewResult:
+    """Record a batch of answers, then finalize. (The bot records incrementally
+    and calls finalize_review directly.)"""
+    quiz = svc.repo.get_quiz(content_id, QuizKind.READING)
+    if quiz is None:
+        raise KeyError(f"no quiz for content_item {content_id}")
+
+    for q in quiz.questions:
+        chosen = answers.get(q.id, -1)
+        svc.repo.record_attempt(q.id, user_id, chosen, is_correct(q, chosen))
+
+    result = await finalize_review(svc, content_id, user_id)
+    await svc.notifier.send(user_id, render_score(result.correct, result.total))
+    if result.anki.apkg_path:
+        await svc.notifier.send_file(
+            user_id, Path(result.anki.apkg_path), caption="🎴 Your Anki cards for today"
+        )
+    return result

@@ -15,9 +15,9 @@ def quiz_invite(content_id: int) -> Keyboard:
     return [[("📖 Quiz me", f"quiz:{content_id}")]]
 
 
-def answer_options(question_id: int, options: list[str]) -> Keyboard:
+def answer_options(content_id: int, question_id: int, options: list[str]) -> Keyboard:
     return [
-        [(f"{_LETTERS[i]}. {opt}"[:_MAX_BTN], f"ans:{question_id}:{i}")]
+        [(f"{_LETTERS[i]}. {opt}"[:_MAX_BTN], f"ans:{content_id}:{question_id}:{i}")]
         for i, opt in enumerate(options)
     ]
 
