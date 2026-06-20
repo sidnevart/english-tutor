@@ -68,4 +68,8 @@ async def test_evening_eval_prepares_quiz_and_nudges(tmp_path):
 async def test_build_scheduler_registers_jobs(tmp_path):
     with open_services(_settings(tmp_path)) as svc:
         scheduler = build_scheduler(svc, svc.settings.admin_user_id)
-        assert {j.id for j in scheduler.get_jobs()} == {"morning_push", "evening_eval"}
+        assert {j.id for j in scheduler.get_jobs()} == {
+            "refresh_content",
+            "morning_push",
+            "evening_eval",
+        }

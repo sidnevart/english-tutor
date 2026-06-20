@@ -49,14 +49,19 @@ In the GitHub repo settings:
 Now every push to `main` deploys automatically. Trigger manually any time via
 the **Deploy** workflow's "Run workflow" button.
 
-## 3. Scheduled content (optional)
+## 3. Scheduled content
 
-The embedded scheduler handles morning/evening jobs. To also refresh content on a
-cadence, add cron entries on the VPS:
+The embedded scheduler runs three jobs (cron from `.env`, in `TZ`):
 
-```cron
-0 7 * * *  cd /opt/english-tutor && /root/.local/bin/uv run tutor scrape
-5 7 * * *  cd /opt/english-tutor && /root/.local/bin/uv run tutor ingest
+- `refresh_content` (`REFRESH_CRON`, default 07:00) — scrape channels + ingest podcasts
+- `morning_push` (`MORNING_CRON`, default 07:30) — deliver new readings
+- `evening_eval` (`EVENING_CRON`, default 20:00) — prepare quizzes + nudge
+
+No system cron needed — it's all in-process. Seed content immediately with one
+manual run:
+
+```bash
+cd /opt/english-tutor && /root/.local/bin/uv run tutor scrape && /root/.local/bin/uv run tutor ingest
 ```
 
 ## Notes

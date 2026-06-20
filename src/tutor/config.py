@@ -70,6 +70,7 @@ class Settings(BaseSettings):
 
     # ---- Schedule / paths ----
     tz: str = "Europe/Moscow"
+    refresh_cron: str = "0 7 * * *"  # scrape channels + ingest podcasts (before morning push)
     morning_cron: str = "30 7 * * *"
     evening_cron: str = "0 20 * * *"
     db_path: str = "data/tutor.db"

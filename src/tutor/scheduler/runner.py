@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 from tutor.config import Settings, get_settings
-from tutor.scheduler.jobs import evening_eval, morning_push
+from tutor.scheduler.jobs import evening_eval, morning_push, refresh_content
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -20,6 +20,13 @@ def build_scheduler(svc: Services, user_id: int) -> AsyncIOScheduler:
 
     tz = ZoneInfo(svc.settings.tz)
     scheduler = AsyncIOScheduler(timezone=tz)
+    scheduler.add_job(
+        refresh_content,
+        CronTrigger.from_crontab(svc.settings.refresh_cron, timezone=tz),
+        args=[svc],
+        id="refresh_content",
+        replace_existing=True,
+    )
     scheduler.add_job(
         morning_push,
         CronTrigger.from_crontab(svc.settings.morning_cron, timezone=tz),
