@@ -6,6 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/english-tutor
+Environment=PYTHONUNBUFFERED=1
 # uv installs to ~/.local/bin; adjust the path/User for your deploy user.
 ExecStart=/root/.local/bin/uv run tutor bot
 Restart=always
