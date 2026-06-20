@@ -6,6 +6,7 @@ from tutor.adapters.notify.telegram import TelegramNotifier
 from tutor.app import open_services
 from tutor.bot.handlers import build_router
 from tutor.config import Settings, get_settings
+from tutor.scheduler.runner import build_scheduler
 
 
 async def run_bot(settings: Settings | None = None) -> None:
@@ -23,6 +24,16 @@ async def run_bot(settings: Settings | None = None) -> None:
         # Share the polling bot for outbound sends (deliveries, decks, scores).
         svc.notifier = TelegramNotifier(bot)
         dp.include_router(build_router(svc))
+
+        scheduler = build_scheduler(svc, settings.admin_user_id)
+        scheduler.start()
         me = await bot.get_me()
-        print(f"[tutor] bot @{me.username} is polling. Press Ctrl-C to stop.")
-        await dp.start_polling(bot)
+        print(
+            f"[tutor] bot @{me.username} is polling; scheduler armed "
+            f"(morning '{settings.morning_cron}', evening '{settings.evening_cron}' "
+            f"{settings.tz}). Press Ctrl-C to stop."
+        )
+        try:
+            await dp.start_polling(bot)
+        finally:
+            scheduler.shutdown(wait=False)

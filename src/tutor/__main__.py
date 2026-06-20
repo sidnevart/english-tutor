@@ -66,6 +66,21 @@ def _run_llm_smoke() -> int:
     return 0
 
 
+def _run_scheduler() -> int:
+    import asyncio
+
+    from tutor.scheduler.runner import run_scheduler
+
+    try:
+        asyncio.run(run_scheduler())
+    except RuntimeError as exc:
+        print(f"[tutor] scheduler failed: {exc}")
+        return 1
+    except KeyboardInterrupt:
+        print("\n[tutor] scheduler stopped.")
+    return 0
+
+
 def _run_scrape() -> int:
     import asyncio
 
@@ -104,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
         case "bot":
             return _run_bot()
         case "scheduler":
-            return _todo("M5")
+            return _run_scheduler()
         case "scrape":
             return _run_scrape()
         case "ingest":
