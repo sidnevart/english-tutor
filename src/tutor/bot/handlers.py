@@ -16,8 +16,14 @@ from tutor.bot.keyboards import answer_options
 from tutor.domain.enums import DeliveryStatus, QuizKind
 from tutor.eval.grader import is_correct
 from tutor.factory import Services
+from tutor.memory import Memory
 from tutor.pipeline import build_evaluation, deliver_new, finalize_review
 from tutor.render import render_score
+
+_COACH_SYSTEM_SUFFIX = (
+    "\n\nYou are now in free-form spoken/written practice mode. Reply"
+    " conversationally, keep it short, and gently correct the learner's English."
+)
 
 
 async def _send_next_question(svc: Services, user_id: int, content_id: int) -> bool:
@@ -51,7 +57,15 @@ async def _finalize(svc: Services, user_id: int, content_id: int) -> None:
         await svc.notifier.send(user_id, f"🧠 <b>Vocabulary from today</b>\n{lines}")
 
 
-def build_router(svc: Services) -> Router:
+async def _coach_reply(svc: Services, user_id: int, utterance: str) -> str:
+    """Free-form conversational practice. Uses the persona + the configured LLM's
+    `complete` (which routes to Hermes when LLM_BACKEND=hermes, else Ollama)."""
+    mem = Memory(svc.settings.soul_dir, user_id)
+    system = mem.persona() + _COACH_SYSTEM_SUFFIX
+    return await svc.llm.complete(system, utterance)
+
+
+def build_router(svc: Services, bot: object | None = None) -> Router:
     router = Router()
 
     @router.message(CommandStart())
@@ -59,10 +73,36 @@ def build_router(svc: Services) -> Router:
         user = message.from_user.id
         svc.repo.ensure_subscriber(user)
         await message.answer(
-            "👋 <b>TOEFL coach</b>\nHere's your next reading — tap “📖 Quiz me” when ready."
+            "👋 <b>TOEFL coach</b>\nHere's your next reading — tap “📖 Quiz me” when ready.\n"
+            "Use /coach to chat for free-form practice, or send a voice message."
         )
         if not await deliver_new(svc, user, limit=1):
             await message.answer("No new readings right now. Fetch more, then /next.")
+
+    @router.message(Command("coach"))
+    async def on_coach(message: Message) -> None:
+        user = message.from_user.id
+        utterance = (message.text or "").partition(" ")[2].strip()
+        if not utterance:
+            await message.answer(
+                "Ask me anything in English, e.g. <code>/coach what does 'ubiquitous' mean?</code>"
+            )
+            return
+        await message.answer(await _coach_reply(svc, user, utterance))
+
+    @router.message(F.voice)
+    async def on_voice(message: Message) -> None:
+        user = message.from_user.id
+        if bot is None:
+            await message.answer("Voice practice isn't available right now.")
+            return
+        dest = Path(svc.settings.data_path) / f"voice_{message.voice.file_unique_id}.oga"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tg_file = await bot.get_file(message.voice.file_id)  # type: ignore[attr-defined]
+        await bot.download_file(tg_file.file_path, destination=dest)  # type: ignore[attr-defined]
+        transcript = await svc.transcriber.transcribe(dest)
+        reply = await _coach_reply(svc, user, f"The learner said: {transcript}")
+        await message.answer(f"📝 <i>{transcript}</i>\n\n{reply}")
 
     @router.message(Command("next"))
     async def on_next(message: Message) -> None:

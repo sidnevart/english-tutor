@@ -24,11 +24,9 @@ def build_llm(settings: Settings) -> LLMClient:
                 settings.ollama_base_url, settings.ollama_api_key, settings.ollama_model
             )
         case "hermes":
-            try:
-                from tutor.adapters.llm.hermes import HermesLLMClient
-            except ImportError as exc:  # arrives in M8
-                raise RuntimeError("LLM_BACKEND=hermes is not available yet (M8).") from exc
-            return HermesLLMClient(settings)
+            from tutor.adapters.llm.hermes import build_hermes_client
+
+            return build_hermes_client(settings)
         case _:
             from tutor.adapters.llm.stub import StubLLMClient
 

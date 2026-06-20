@@ -61,9 +61,12 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     openai_api_key: str = ""
 
-    # ---- Hermes (optional) ----
+    # ---- Hermes (optional; conversational plane only, never graded path) ----
     hermes_enabled: bool = False
     hermes_home: str = ""
+    hermes_base_url: str = ""  # OpenAI-compatible endpoint for conversational turns
+    hermes_model: str = ""
+    hermes_api_key: str = ""
 
     # ---- Schedule / paths ----
     tz: str = "Europe/Moscow"

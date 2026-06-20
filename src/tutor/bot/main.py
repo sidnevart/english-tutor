@@ -23,7 +23,7 @@ async def run_bot(settings: Settings | None = None) -> None:
     with open_services(settings) as svc:
         # Share the polling bot for outbound sends (deliveries, decks, scores).
         svc.notifier = TelegramNotifier(bot)
-        dp.include_router(build_router(svc))
+        dp.include_router(build_router(svc, bot))
 
         scheduler = build_scheduler(svc, settings.admin_user_id)
         scheduler.start()
