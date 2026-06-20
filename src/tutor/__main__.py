@@ -81,6 +81,27 @@ def _run_scheduler() -> int:
     return 0
 
 
+def _run_ingest() -> int:
+    import asyncio
+
+    from tutor.app import open_services
+    from tutor.ingest.rss import run_ingest
+
+    async def go() -> None:
+        with open_services() as svc:
+            counts = await run_ingest(svc.settings, svc.repo)
+            for name, n in counts.items():
+                print(f"  {name}: +{n}")
+            print(f"[tutor] ingested {sum(counts.values())} new episode(s)")
+
+    try:
+        asyncio.run(go())
+    except RuntimeError as exc:
+        print(f"[tutor] ingest failed: {exc}")
+        return 1
+    return 0
+
+
 def _run_scrape() -> int:
     import asyncio
 
@@ -123,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
         case "scrape":
             return _run_scrape()
         case "ingest":
-            return _todo("M6")
+            return _run_ingest()
         case "llm-smoke":
             return _run_llm_smoke()
         case _:  # pragma: no cover

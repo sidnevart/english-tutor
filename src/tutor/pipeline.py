@@ -28,6 +28,35 @@ class ReviewResult:
     anki: AnkiResult
 
 
+async def _resolve_audio(url: str, dest: Path) -> Path:
+    """Return a local path for the audio: a local file as-is, else download it."""
+    local = Path(url.replace("file://", ""))
+    if local.exists():
+        return local
+    import httpx
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        dest.write_bytes(resp.content)
+    return dest
+
+
+async def ensure_transcript(svc: Services, content_id: int) -> str:
+    """Lazily transcribe a podcast: download audio + run STT, fill body_text.
+    No-op for items that already have text or no audio."""
+    content = svc.repo.get(content_id)
+    if content is None:
+        raise KeyError(f"content_item {content_id} not found")
+    if content.body_text.strip() or not content.audio_url:
+        return content.body_text
+    audio = await _resolve_audio(content.audio_url, svc.settings.data_path / f"audio_{content_id}")
+    text = await svc.transcriber.transcribe(audio, lang=content.lang)
+    svc.repo.set_body_text(content_id, text)
+    return text
+
+
 async def deliver_new(svc: Services, user_id: int, limit: int = 5) -> list[int]:
     """Push NEW items to the learner and mark them DELIVERED."""
     delivered: list[int] = []
@@ -47,6 +76,12 @@ async def build_evaluation(
     content = svc.repo.get(content_id)
     if content is None:
         raise KeyError(f"content_item {content_id} not found")
+
+    # Podcasts arrive without text; transcribe lazily before evaluating.
+    if not content.body_text.strip() and content.audio_url:
+        await ensure_transcript(svc, content_id)
+        content = svc.repo.get(content_id)
+        assert content is not None
 
     svc.repo.save_vocab(content_id, select_vocab(content_id, content.body_text, limit=vocab_limit))
 
