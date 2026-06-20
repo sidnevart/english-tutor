@@ -30,6 +30,42 @@ def _run_bot() -> int:
     return 0
 
 
+def _run_llm_smoke() -> int:
+    import asyncio
+
+    from tutor.adapters.llm.ollama import OllamaLLMClient
+    from tutor.config import get_settings
+    from tutor.eval.schemas import ReadingQuizPayload
+
+    s = get_settings()
+    passage = (
+        "The mitochondrion is often called the powerhouse of the cell because it "
+        "generates most of the cell's supply of ATP, used as chemical energy. "
+        "Mitochondria also play roles in signaling, differentiation, and cell death."
+    )
+
+    async def go() -> None:
+        llm = OllamaLLMClient(s.ollama_base_url, s.ollama_api_key, s.ollama_model)
+        print(f"[tutor] querying {s.ollama_model} at {s.ollama_base_url} ...")
+        payload = await llm.complete_json(
+            "You are a TOEFL reading-comprehension coach.",
+            f"Write 2 multiple-choice questions (4 options each) about: {passage}",
+            ReadingQuizPayload,
+        )
+        print(f"[tutor] OK — {len(payload.questions)} valid question(s):")
+        for i, q in enumerate(payload.questions, 1):
+            print(f"  Q{i}: {q.prompt}")
+            for j, opt in enumerate(q.options):
+                print(f"     {'*' if j == q.correct_index else ' '} {opt}")
+
+    try:
+        asyncio.run(go())
+    except Exception as exc:  # noqa: BLE001
+        print(f"[tutor] llm-smoke failed: {exc}")
+        return 1
+    return 0
+
+
 def _run_scrape() -> int:
     import asyncio
 
@@ -74,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
         case "ingest":
             return _todo("M6")
         case "llm-smoke":
-            return _todo("M4")
+            return _run_llm_smoke()
         case _:  # pragma: no cover
             parser.print_help()
             return 1
