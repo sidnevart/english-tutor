@@ -19,7 +19,8 @@ path. Every external dependency (LLM, STT, TTS, Anki, Telegram) is a Protocol
 with a stub + real implementation, swapped via a one-line `.env` change, so the
 **entire loop runs offline on stubs**.
 
-See [`docs`/the plan] for the full design and milestone roadmap.
+Deployment is via GitHub Actions (CI + SSH deploy) — see [docs/DEPLOY.md](docs/DEPLOY.md).
+The optional Hermes voice/chat plane is documented in [docs/HERMES.md](docs/HERMES.md).
 
 ## Quickstart (offline, no secrets)
 
@@ -28,6 +29,20 @@ uv sync                       # create venv + install deps (Python 3.12)
 uv run pytest                 # full stub loop runs offline, no network
 uv run tutor --help           # CLI: bot | scheduler | scrape | ingest | llm-smoke
 ```
+
+## Running for real
+
+```bash
+uv sync --extra scrape        # adds Telethon for channel scraping
+# fill .env: BOT_TOKEN, TG_API_ID, TG_API_HASH, LLM_BACKEND=ollama
+uv run tutor scrape           # pull articles from your channels
+uv run tutor ingest           # pull today's podcasts (RSS)
+uv run tutor llm-smoke        # verify Ollama returns valid quiz JSON
+uv run tutor bot              # run the bot + embedded scheduler
+```
+
+Bot commands: `/start` (deliver a reading + quiz), `/next` (next reading),
+`/coach <text>` (free-form practice), or send a voice message.
 
 ## Configuration
 
@@ -48,6 +63,17 @@ keys only as you enable each real backend:
 
 ## Status
 
-Built bottom-up in tiny, individually testable milestones (M0 hygiene → M9
-hardening). The offline foundation (M0–M2) lands first; the live Telegram +
-Ollama slice (M3+) follows once credentials are provided.
+Feature-complete (M0–M9), built bottom-up in tiny, individually tested
+milestones:
+
+- **M0–M2** secret hygiene, config + state-machine repo, offline loop on stubs
+- **M3** live Telegram scrape (Telethon) + interactive quiz bot
+- **M4** real `glm-5:cloud` TOEFL questions
+- **M5** scheduler (morning push + evening eval)
+- **M6** podcasts (RSS) with cadence + lazy transcription
+- **M7** native `SOUL.md` persona + per-user recall memory
+- **M8** optional, sealed Hermes voice/chat plane
+- **M9** CI/CD (GitHub Actions) deploy to the VPS
+
+51 tests, lint-clean. Channel scrape, podcast feeds, and the LLM are all
+live-validated.

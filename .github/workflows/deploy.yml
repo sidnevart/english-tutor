@@ -1,0 +1,29 @@
+name: Deploy
+
+# Dormant until you set the repository VARIABLE `DEPLOY_ENABLED=true` and the
+# secrets below. This prevents failed runs before the VPS is configured.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    if: ${{ vars.DEPLOY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          # Prefer key auth. For password auth, delete `key:` and use
+          #   password: ${{ secrets.VPS_PASSWORD }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script_stop: true
+          script: |
+            cd /opt/english-tutor
+            git pull --ff-only
+            ~/.local/bin/uv sync --extra scrape
+            systemctl restart english-tutor-bot
+            systemctl --no-pager --lines=5 status english-tutor-bot

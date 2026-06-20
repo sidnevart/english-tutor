@@ -1,0 +1,17 @@
+[Unit]
+Description=english-tutor — autonomous TOEFL Telegram bot + scheduler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/english-tutor
+# uv installs to ~/.local/bin; adjust the path/User for your deploy user.
+ExecStart=/root/.local/bin/uv run tutor bot
+Restart=always
+RestartSec=5
+# The app loads /opt/english-tutor/.env itself (pydantic-settings), so secrets
+# live in that file, not here. bot_data/ and data/ resolve from WorkingDirectory.
+
+[Install]
+WantedBy=multi-user.target
