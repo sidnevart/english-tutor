@@ -21,6 +21,7 @@ def _settings(tmp_path, tz: str = "UTC") -> Settings:
         notifier_backend="stub",
         anki_backend="genanki",
         tz=tz,
+        soul_dir=str(tmp_path / "soul"),
     )
 
 

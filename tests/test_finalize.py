@@ -17,6 +17,7 @@ async def test_finalize_from_incremental_attempts(tmp_path):
         llm_backend="stub",
         notifier_backend="stub",
         anki_backend="genanki",
+        soul_dir=str(tmp_path / "soul"),
     )
     with open_services(settings) as svc:
         user = settings.admin_user_id
@@ -32,7 +33,7 @@ async def test_finalize_from_incremental_attempts(tmp_path):
             user,
         )
         await deliver_new(svc, user, 1)
-        quiz = await build_evaluation(svc, cid)
+        quiz = await build_evaluation(svc, cid, user)
 
         # record answers one at a time (interactive style): all correct
         for q in quiz.questions:

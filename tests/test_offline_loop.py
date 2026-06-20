@@ -28,6 +28,7 @@ def _settings(tmp_path) -> Settings:
         llm_backend="stub",
         notifier_backend="stub",
         anki_backend="genanki",
+        soul_dir=str(tmp_path / "soul"),
     )
 
 
@@ -58,7 +59,7 @@ async def test_full_loop_offline(tmp_path):
         assert notifier.messages[0].keyboard == [[("📖 Quiz me", f"quiz:{cid}")]]
 
         # 2) Evening evaluation (vocab deterministic + quiz via stub LLM)
-        quiz = await build_evaluation(svc, cid)
+        quiz = await build_evaluation(svc, cid, user)
         assert len(quiz.questions) == 3
         assert len(svc.repo.get_vocab(cid)) > 0
 

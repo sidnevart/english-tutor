@@ -16,6 +16,7 @@ from tutor.eval.grader import is_correct
 from tutor.eval.quiz_builder import build_reading_quiz
 from tutor.eval.vocab import select_vocab
 from tutor.factory import Services
+from tutor.memory import Memory
 from tutor.render import render_card, render_score
 
 
@@ -39,15 +40,20 @@ async def deliver_new(svc: Services, user_id: int, limit: int = 5) -> list[int]:
 
 
 async def build_evaluation(
-    svc: Services, content_id: int, *, vocab_limit: int = 8, n_questions: int = 3
+    svc: Services, content_id: int, user_id: int, *, vocab_limit: int = 8, n_questions: int = 3
 ) -> Quiz:
-    """Select vocabulary (deterministic) and generate a reading quiz (LLM)."""
+    """Select vocabulary (deterministic) and generate a reading quiz (LLM),
+    using the learner's persona + recall memory to shape the questions."""
     content = svc.repo.get(content_id)
     if content is None:
         raise KeyError(f"content_item {content_id} not found")
 
     svc.repo.save_vocab(content_id, select_vocab(content_id, content.body_text, limit=vocab_limit))
-    questions = await build_reading_quiz(svc.llm, content, n=n_questions)
+
+    mem = Memory(svc.settings.soul_dir, user_id)
+    questions = await build_reading_quiz(
+        svc.llm, content, n=n_questions, system=mem.persona(), recall_hint=mem.recall_hint()
+    )
     svc.repo.save_quiz(content_id, QuizKind.READING, questions)
 
     quiz = svc.repo.get_quiz(content_id, QuizKind.READING)
@@ -72,12 +78,16 @@ async def finalize_review(svc: Services, content_id: int, user_id: int) -> Revie
 
     content = svc.repo.get(content_id)
     assert content is not None
-    cards = build_cards(content, svc.repo.get_vocab(content_id), missed)
+    vocab = svc.repo.get_vocab(content_id)
+    cards = build_cards(content, vocab, missed)
     anki = await svc.anki.add_cards(svc.settings.anki_deck, cards)
     svc.repo.save_anki_cards(content_id, cards, svc.settings.anki_deck, anki.sink)
 
     if content.status != DeliveryStatus.REVIEWED:
         svc.repo.mark_reviewed(content_id)
+
+    # Accumulate today's vocabulary into the learner's recall memory.
+    Memory(svc.settings.soul_dir, user_id).add_weak_words([v.word for v in vocab])
 
     return ReviewResult(content_id, correct, len(quiz.questions), anki)
 

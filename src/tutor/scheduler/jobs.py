@@ -21,7 +21,7 @@ async def evening_eval(svc: Services, user_id: int) -> list[int]:
     prepared: list[int] = []
     for item in svc.repo.fetch_by_status(user_id, DeliveryStatus.DELIVERED):
         if svc.repo.get_quiz(item.id, QuizKind.READING) is None:
-            await build_evaluation(svc, item.id)
+            await build_evaluation(svc, item.id, user_id)
         title = item.title or "today's reading"
         await svc.notifier.send(
             user_id, f"🌙 Evening quiz is ready: <b>{title}</b>", keyboard=quiz_invite(item.id)

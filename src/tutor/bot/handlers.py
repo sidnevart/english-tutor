@@ -76,7 +76,7 @@ def build_router(svc: Services) -> Router:
         user = cb.from_user.id
         content_id = int(cb.data.split(":")[1])
         if svc.repo.get_quiz(content_id, QuizKind.READING) is None:
-            await build_evaluation(svc, content_id)
+            await build_evaluation(svc, content_id, user)
         if not await _send_next_question(svc, user, content_id):
             await _finalize(svc, user, content_id)
 
