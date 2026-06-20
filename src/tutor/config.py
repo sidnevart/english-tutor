@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     tg_session_string: str = ""
     tg_session_path: str = "bot_data/telegram_e2e_session"
     scrape_channels: str = "1137165265,1356345589"
+    min_article_len: int = 350  # drop blurbs/ads shorter than this when scraping
 
     # ---- Ollama / LLM ----
     ollama_base_url: str = "http://localhost:11434/v1"

@@ -27,9 +27,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Telegram channel scraping (MTProto userbot). kurigram is the maintained
-# Pyrogram fork and reads the existing bot_data/*.session. Added in M3.
-scrape = ["kurigram>=2.2"]
+# Telegram channel scraping (MTProto userbot). The existing bot_data session
+# is a Telethon session, so we use Telethon to reuse it without re-auth.
+scrape = ["telethon>=1.36"]
 # Local speech-to-text (free, uses ffmpeg). Added in M6.
 stt = ["faster-whisper>=1.0"]
 # Local text-to-speech. Added later.

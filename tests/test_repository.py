@@ -2,7 +2,23 @@
 
 from __future__ import annotations
 
-from tutor.domain import QuizKind, QuizQuestion, VocabItem
+from tutor.domain import ContentType, QuizKind, QuizQuestion, RawItem, SourceType, VocabItem
+
+
+def test_cross_source_dedup_by_body(repo):
+    def raw(source_ref: str, ext: str) -> RawItem:
+        return RawItem(
+            source_type=SourceType.CHANNEL,
+            source_ref=source_ref,
+            external_id=ext,
+            content_type=ContentType.ARTICLE,
+            body_text="The very same article body, cross-posted to two channels.",
+        )
+
+    first = repo.add_content(raw("111", "1"), user_id=764315256)
+    second = repo.add_content(raw("222", "2"), user_id=764315256)  # different source, same body
+    assert first is not None
+    assert second is None
 
 
 def test_quiz_roundtrip_and_attempts(repo, sample_raw):

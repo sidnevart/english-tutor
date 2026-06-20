@@ -6,7 +6,30 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from tutor.domain.enums import ContentType, SourceType
-from tutor.ingest.telegram_scraper import normalize
+from tutor.domain.models import RawItem
+from tutor.ingest.telegram_scraper import is_suitable, normalize
+
+
+def _raw(body: str) -> RawItem:
+    return RawItem(
+        source_type=SourceType.CHANNEL,
+        source_ref="1",
+        external_id="x",
+        content_type=ContentType.ARTICLE,
+        body_text=body,
+    )
+
+
+def test_is_suitable_keeps_long_english():
+    assert is_suitable(_raw("This is a sufficiently long English passage. " * 12)) is True
+
+
+def test_is_suitable_drops_short_blurb():
+    assert is_suitable(_raw("Brian Tracy - Eat That Frog!")) is False
+
+
+def test_is_suitable_drops_cyrillic_ad():
+    assert is_suitable(_raw("Летние цены на английский: скидки до 40% и подарки. " * 12)) is False
 
 
 @dataclass

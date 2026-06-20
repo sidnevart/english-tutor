@@ -28,10 +28,12 @@ CREATE TABLE IF NOT EXISTS content_item (
     fetched_at    TEXT NOT NULL,
     delivered_at  TEXT,
     reviewed_at   TEXT,
+    body_hash     TEXT NOT NULL DEFAULT '',     -- cross-source dedup key
     UNIQUE (source_ref, external_id)
 );
 
 CREATE INDEX IF NOT EXISTS ix_content_status ON content_item (user_id, status);
+CREATE INDEX IF NOT EXISTS ix_content_body_hash ON content_item (user_id, body_hash);
 
 CREATE TABLE IF NOT EXISTS quiz (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,

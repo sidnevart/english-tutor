@@ -8,6 +8,7 @@ is a second, independent guard.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from datetime import UTC, datetime
@@ -47,14 +48,26 @@ class Repository:
     # ---- content ingestion -------------------------------------------------
     def add_content(self, item: RawItem, user_id: int) -> int | None:
         """Insert a scraped/ingested item. Returns the new id, or None if it is
-        a duplicate (idempotent on source_ref + external_id)."""
+        a duplicate — idempotent on (source_ref, external_id) and, across
+        sources, on the body hash (so the same post cross-posted to two channels
+        is stored once)."""
+        body = item.body_text.strip()
+        body_hash = hashlib.sha1(body.encode("utf-8")).hexdigest() if body else ""
+        if body_hash:
+            dup = self.conn.execute(
+                "SELECT 1 FROM content_item WHERE user_id = ? AND body_hash = ?",
+                (user_id, body_hash),
+            ).fetchone()
+            if dup:
+                return None
+
         cur = self.conn.execute(
             """
             INSERT OR IGNORE INTO content_item
                 (user_id, source_type, source_ref, external_id, content_type,
                  title, url, body_text, audio_url, duration_sec, lang,
-                 cadence_bucket, status, fetched_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'NEW', ?)
+                 cadence_bucket, status, fetched_at, body_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'NEW', ?, ?)
             """,
             (
                 user_id,
@@ -70,6 +83,7 @@ class Repository:
                 item.lang,
                 item.cadence_bucket.value if item.cadence_bucket else None,
                 _now(),
+                body_hash,
             ),
         )
         self.conn.commit()
