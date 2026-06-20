@@ -37,11 +37,17 @@ def build_llm(settings: Settings) -> LLMClient:
 
 def build_notifier(settings: Settings) -> Notifier:
     if settings.notifier_backend == "telegram":
-        try:
-            from tutor.adapters.notify.telegram import TelegramNotifier
-        except ImportError as exc:  # arrives in M3
-            raise RuntimeError("NOTIFIER_BACKEND=telegram is not available yet (M3).") from exc
-        return TelegramNotifier(settings.bot_token)
+        from aiogram import Bot
+        from aiogram.client.default import DefaultBotProperties
+        from aiogram.enums import ParseMode
+
+        from tutor.adapters.notify.telegram import TelegramNotifier
+
+        bot = Bot(
+            settings.bot_token,
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        )
+        return TelegramNotifier(bot)
     from tutor.adapters.notify.stub import StubNotifier
 
     return StubNotifier()

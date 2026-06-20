@@ -15,6 +15,28 @@ def _todo(milestone: str) -> int:
     return 0
 
 
+def _run_scrape() -> int:
+    import asyncio
+
+    from tutor.app import open_services
+    from tutor.ingest.telegram_scraper import run_scrape
+
+    async def go() -> None:
+        with open_services() as svc:
+            counts = await run_scrape(svc.settings, svc.repo)
+            total = sum(counts.values())
+            for channel, n in counts.items():
+                print(f"  channel {channel}: +{n} new")
+            print(f"[tutor] scraped {total} new item(s)")
+
+    try:
+        asyncio.run(go())
+    except RuntimeError as exc:
+        print(f"[tutor] scrape failed: {exc}")
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tutor", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -33,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
         case "scheduler":
             return _todo("M5")
         case "scrape":
-            return _todo("M3")
+            return _run_scrape()
         case "ingest":
             return _todo("M6")
         case "llm-smoke":
