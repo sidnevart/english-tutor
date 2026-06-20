@@ -1,0 +1,65 @@
+[project]
+name = "english-tutor"
+version = "0.1.0"
+description = "Autonomous self-hosted TOEFL preparation assistant for Telegram"
+readme = "README.md"
+requires-python = ">=3.12,<3.15"
+license = { text = "MIT" }
+authors = [{ name = "sidnevart" }]
+
+dependencies = [
+    # config
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",
+    # bot UX
+    "aiogram>=3.13",
+    # content ingestion (RSS now; Telegram userbot via the `scrape` extra)
+    "feedparser>=6.0.11",
+    # scheduling
+    "apscheduler>=3.10,<4",
+    # LLM access (OpenAI-compatible Ollama endpoint)
+    "openai>=1.50",
+    "httpx>=0.27",
+    # vocabulary selection
+    "wordfreq>=3.1",
+    # Anki card generation (.apkg)
+    "genanki>=0.13",
+]
+
+[project.optional-dependencies]
+# Telegram channel scraping (MTProto userbot). kurigram is the maintained
+# Pyrogram fork and reads the existing bot_data/*.session. Added in M3.
+scrape = ["kurigram>=2.2"]
+# Local speech-to-text (free, uses ffmpeg). Added in M6.
+stt = ["faster-whisper>=1.0"]
+# Local text-to-speech. Added later.
+tts = ["edge-tts>=6.1"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+tutor = "tutor.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tutor"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

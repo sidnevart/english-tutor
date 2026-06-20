@@ -1,0 +1,51 @@
+# ---- Secrets & local config (NEVER commit) ----
+.env
+.env.*
+!.env.example
+
+# ---- Telegram sessions & runtime state ----
+bot_data/
+*.session
+*.session-journal
+*.session_string
+telegram_session_string.txt
+
+# ---- App data (db, generated decks, cached audio) ----
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.apkg
+*.mp3
+*.wav
+*.m4a
+*.ogg
+
+# ---- Native SOUL.md per-user memory (persona template stays tracked) ----
+soul/memory/
+
+# ---- Python / uv ----
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- Editors / OS ----
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# ---- Claude Code local tooling (not part of the product) ----
+.claude/
+skills-lock.json
