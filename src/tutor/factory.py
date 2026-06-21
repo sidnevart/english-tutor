@@ -68,14 +68,15 @@ def build_anki(settings: Settings) -> AnkiSink:
 
 
 def build_transcriber(settings: Settings) -> Transcriber:
-    if settings.stt_backend in ("whisper", "cloud"):
-        try:
-            from tutor.adapters.stt.real import build_real_transcriber
-        except ImportError as exc:  # arrives in M6
-            raise RuntimeError(
-                f"STT_BACKEND={settings.stt_backend} not available yet (M6)."
-            ) from exc
-        return build_real_transcriber(settings)
+    if settings.stt_backend == "cloud":
+        from tutor.adapters.stt.cloud import build_cloud_transcriber
+
+        return build_cloud_transcriber(settings)
+    if settings.stt_backend == "whisper":
+        raise RuntimeError(
+            "STT_BACKEND=whisper (local faster-whisper) is not implemented; "
+            "use 'cloud' (Groq/OpenAI) or 'stub'."
+        )
     from tutor.adapters.stt.stub import StubTranscriber
 
     return StubTranscriber()

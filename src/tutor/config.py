@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     # ---- STT/TTS cloud (optional) ----
     groq_api_key: str = ""
     openai_api_key: str = ""
+    stt_model: str = ""  # blank -> whisper-large-v3 (Groq) or whisper-1 (OpenAI)
+    stt_max_seconds: int = 720  # transcribe only the first N seconds (cost/size cap)
 
     # ---- Hermes (optional; conversational plane only, never graded path) ----
     hermes_enabled: bool = False

@@ -54,6 +54,9 @@ async def ensure_transcript(svc: Services, content_id: int) -> str:
     audio = await _resolve_audio(content.audio_url, svc.settings.data_path / f"audio_{content_id}")
     text = await svc.transcriber.transcribe(audio, lang=content.lang)
     svc.repo.set_body_text(content_id, text)
+    # Clean up audio we downloaded (leave caller-provided local files alone).
+    if audio.name.startswith(f"audio_{content_id}") and audio.exists():
+        audio.unlink(missing_ok=True)
     return text
 
 
