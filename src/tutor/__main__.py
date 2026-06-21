@@ -30,6 +30,53 @@ def _run_bot() -> int:
     return 0
 
 
+def _run_eval_cards() -> int:
+    """Eval the flashcard prompt against the real LLM with quality metrics."""
+    import asyncio
+
+    from tutor.adapters.llm.ollama import OllamaLLMClient
+    from tutor.config import get_settings
+    from tutor.eval.flashcards import _present, make_flashcards
+
+    samples = [
+        (
+            "science",
+            "The mitochondrion is often called the powerhouse of the cell because it "
+            "generates most of the cell's supply of ATP. Researchers recently stumbled "
+            "upon a serendipitous finding that could shed light on ageing.",
+        ),
+        (
+            "idioms",
+            "When the startup hit rock bottom, the founders had to think outside the box. "
+            "They bit the bullet, cut their losses, and pivoted. In hindsight it was a "
+            "blessing in disguise that paid off down the road.",
+        ),
+    ]
+    s = get_settings()
+
+    async def go() -> None:
+        llm = OllamaLLMClient(s.ollama_base_url, s.ollama_api_key, s.ollama_model)
+        for name, text in samples:
+            cards = await make_flashcards(llm, text, limit=6)
+            in_text = sum(1 for c in cards if _present(c.front, text))
+            idioms = sum(1 for c in cards if "idiom" in c.tags)
+            ru = sum(1 for c in cards if "🇷🇺" in c.back)
+            print(
+                f"\n[{name}] {len(cards)} cards | in-text {in_text}/{len(cards)} | "
+                f"idioms {idioms} | with-RU {ru}"
+            )
+            for c in cards:
+                tag = "idiom" if "idiom" in c.tags else "word "
+                print(f"  ({tag}) {c.front} -> {c.back[:100].replace(chr(10), ' / ')}")
+
+    try:
+        asyncio.run(go())
+    except Exception as exc:  # noqa: BLE001
+        print(f"[tutor] eval-cards failed: {exc}")
+        return 1
+    return 0
+
+
 def _run_llm_smoke() -> int:
     import asyncio
 
@@ -133,6 +180,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("scrape", help="scrape the configured Telegram channels once")
     sub.add_parser("ingest", help="fetch RSS podcast feeds once")
     sub.add_parser("llm-smoke", help="check the configured LLM backend returns valid quiz JSON")
+    sub.add_parser("eval-cards", help="eval the flashcard prompt against the real LLM")
 
     args = parser.parse_args(argv)
 
@@ -147,6 +195,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_ingest()
         case "llm-smoke":
             return _run_llm_smoke()
+        case "eval-cards":
+            return _run_eval_cards()
         case _:  # pragma: no cover
             parser.print_help()
             return 1

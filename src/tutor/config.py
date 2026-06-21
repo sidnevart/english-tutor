@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     evening_cron: str = "0 20 * * *"
     morning_articles: int = 2  # how many articles to deliver each morning
     morning_podcasts: int = 2  # how many podcasts to deliver each morning
+    flashcards_per_item: int = 8  # words+idioms Anki cards generated per delivered item
     db_path: str = "data/tutor.db"
     data_dir: str = "data"
     soul_dir: str = "soul"

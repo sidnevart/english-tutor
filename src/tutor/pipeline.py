@@ -13,6 +13,7 @@ from tutor.bot.keyboards import quiz_invite
 from tutor.domain.enums import ContentType, DeliveryStatus, QuizKind
 from tutor.domain.models import AnkiResult, Quiz
 from tutor.eval.anki_cards import build_cards
+from tutor.eval.flashcards import make_flashcards
 from tutor.eval.grader import is_correct
 from tutor.eval.quiz_builder import build_reading_quiz
 from tutor.eval.transcript import clean_transcript
@@ -67,16 +68,50 @@ def _quiz_label(item) -> str:
     return "🎧 Listening quiz" if item.content_type == ContentType.PODCAST else "📖 Quiz me"
 
 
+async def send_flashcards(svc: Services, user_id: int, content_id: int) -> int:
+    """Generate words+idioms Anki cards for an item and send the deck. Resilient:
+    a failure (LLM/STT/network) is logged and never blocks delivery. Returns the
+    number of cards sent."""
+    try:
+        content = svc.repo.get(content_id)
+        if content is None:
+            return 0
+        if content.content_type == ContentType.PODCAST and not content.body_text.strip():
+            await ensure_transcript(svc, content_id)
+            content = svc.repo.get(content_id)
+        text = (content.body_text or "").strip() if content else ""
+        if not text:
+            return 0
+        cards = await make_flashcards(svc.llm, text, limit=svc.settings.flashcards_per_item)
+        if not cards:
+            return 0
+        result = await svc.anki.add_cards(svc.settings.anki_deck, cards)
+        svc.repo.save_anki_cards(content_id, cards, svc.settings.anki_deck, result.sink)
+        if result.apkg_path:
+            kind = "episode" if content.content_type == ContentType.PODCAST else "article"
+            await svc.notifier.send_file(
+                user_id,
+                Path(result.apkg_path),
+                caption=f"🎴 {len(cards)} words & idioms from this {kind}",
+            )
+        return len(cards)
+    except Exception as exc:  # noqa: BLE001
+        svc.repo.log_job("flashcards", "error", str(exc)[:200])
+        return 0
+
+
 async def deliver_new(
     svc: Services, user_id: int, limit: int = 5, content_type: ContentType | None = None
 ) -> list[int]:
-    """Push NEW items (optionally of one type) to the learner, mark DELIVERED."""
+    """Push NEW items (optionally of one type) to the learner, mark DELIVERED,
+    and immediately send the words+idioms Anki deck for each."""
     delivered: list[int] = []
     for item in svc.repo.fetch_by_status(user_id, DeliveryStatus.NEW, limit, content_type):
         await svc.notifier.send(
             user_id, render_card(item), keyboard=quiz_invite(item.id, _quiz_label(item))
         )
         svc.repo.mark_delivered(item.id)
+        await send_flashcards(svc, user_id, item.id)
         delivered.append(item.id)
     return delivered
 

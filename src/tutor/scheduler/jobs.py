@@ -1,12 +1,15 @@
-"""Scheduled jobs. They prepare content and nudge the learner; the interactive
-quiz itself is still driven by the bot's inline keyboards."""
+"""Scheduled jobs: refresh content, push the morning mix, remind about Anki.
+
+The interactive comprehension quiz stays on-demand (the "Quiz me" button); the
+Anki words+idioms deck is generated at delivery time, so the evening job is just
+a reminder to review.
+"""
 
 from __future__ import annotations
 
-from tutor.bot.keyboards import quiz_invite
-from tutor.domain.enums import ContentType, DeliveryStatus, QuizKind
+from tutor.domain.enums import ContentType, DeliveryStatus
 from tutor.factory import Services
-from tutor.pipeline import build_evaluation, deliver_new
+from tutor.pipeline import deliver_new
 
 
 async def refresh_content(svc: Services) -> dict[str, object]:
@@ -31,8 +34,8 @@ async def refresh_content(svc: Services) -> dict[str, object]:
 
 
 async def morning_push(svc: Services, user_id: int) -> list[int]:
-    """Deliver a cadence-respecting mix: N articles + M podcasts (per .env), so
-    podcasts are never crowded out by articles."""
+    """Deliver a cadence-respecting mix: N articles + M podcasts (per .env), each
+    with its words+idioms Anki deck. Podcasts are never crowded out by articles."""
     delivered: list[int] = []
     delivered += await deliver_new(svc, user_id, svc.settings.morning_articles, ContentType.ARTICLE)
     delivered += await deliver_new(svc, user_id, svc.settings.morning_podcasts, ContentType.PODCAST)
@@ -40,19 +43,12 @@ async def morning_push(svc: Services, user_id: int) -> list[int]:
     return delivered
 
 
-async def evening_eval(svc: Services, user_id: int) -> list[int]:
-    """For each DELIVERED item, ensure a quiz exists and nudge the learner."""
-    prepared: list[int] = []
-    for item in svc.repo.fetch_by_status(user_id, DeliveryStatus.DELIVERED):
-        if svc.repo.get_quiz(item.id, QuizKind.READING) is None:
-            await build_evaluation(svc, item.id, user_id)
-        title = item.title or "today's material"
-        label = "🎧 Listening quiz" if item.content_type == ContentType.PODCAST else "📖 Quiz me"
-        await svc.notifier.send(
-            user_id,
-            f"🌙 Evening quiz is ready: <b>{title}</b>",
-            keyboard=quiz_invite(item.id, label),
-        )
-        prepared.append(item.id)
-    svc.repo.log_job("evening_eval", "ok", f"prepared {len(prepared)}")
-    return prepared
+async def evening_reminder(svc: Services, user_id: int) -> None:
+    """Evening nudge to review today's Anki cards (words & idioms)."""
+    today = svc.repo.fetch_by_status(user_id, DeliveryStatus.DELIVERED, limit=50)
+    extra = f" You picked up {len(today)} item(s) today." if today else ""
+    await svc.notifier.send(
+        user_id,
+        "🌙 <b>Time for your Anki review</b> — go through today's words & idioms!" + extra,
+    )
+    svc.repo.log_job("evening_reminder", "ok", f"items={len(today)}")

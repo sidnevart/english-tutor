@@ -18,3 +18,15 @@ class ReadingQuizPayload(BaseModel):
 
 class CleanedTranscript(BaseModel):
     content: str
+
+
+class Flashcard(BaseModel):
+    term: str  # the word or idiom, exactly as it appears in the text
+    kind: str = "word"  # "word" | "idiom"
+    definition: str  # concise English definition
+    example: str = ""  # a natural example sentence
+    translation: str = ""  # Russian translation
+
+
+class FlashcardPayload(BaseModel):
+    cards: list[Flashcard] = Field(default_factory=list)
