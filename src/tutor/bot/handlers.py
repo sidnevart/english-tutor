@@ -35,7 +35,8 @@ _COACH_SYSTEM_SUFFIX = (
     "\n\nReply conversationally, keep it short, and gently correct the learner's English."
 )
 
-# Single source of truth for the slash menu (set_my_commands) and /help.
+# Terse one-liners for the Telegram slash menu (set_my_commands). Telegram caps
+# these and shows one per line, so the human-readable detail lives in HELP_TEXT.
 COMMANDS: list[tuple[str, str]] = [
     ("start", "Today's material + quiz"),
     ("next", "Next reading or episode"),
@@ -46,6 +47,29 @@ COMMANDS: list[tuple[str, str]] = [
     ("progress", "Your stats"),
     ("help", "Show available commands"),
 ]
+
+# Rich, grouped /help body. HTML parse mode → escape & < > (e.g. &lt;question&gt;).
+HELP_TEXT = (
+    "🎓 <b>TOEFL coach — help</b>\n\n"
+    "<b>📚 Content</b>\n"
+    "/start — register and deliver today's first reading or episode "
+    "(with its words &amp; idioms Anki deck) and a quiz button\n"
+    "/next — deliver the next reading or episode the same way\n"
+    "Tap <b>📖 Quiz me</b> under any item for a 3-question comprehension quiz.\n\n"
+    "<b>🎙 Speaking &amp; dialog</b>\n"
+    "/speak — start a spoken practice session: I set a TOEFL-style task, you "
+    "answer by voice or text, and we go back and forth\n"
+    "/coach &lt;question&gt; — a quick one-off question "
+    "(e.g. <code>/coach what does 'ubiquitous' mean?</code>); I answer and "
+    "gently correct your English\n"
+    "/stop — end the current /speak or discussion session and get short feedback\n\n"
+    "<b>📊 Tracking</b>\n"
+    "/cards — re-send your full Anki deck as an .apkg file\n"
+    "/progress — your stats: cards generated, delivered, reviewed, queued\n\n"
+    "<i>Tip: in the evening reminder, tap “💬 Discuss today's material” to talk "
+    "about the day's article or episode. A plain voice message any time gets a "
+    "quick coach reply.</i>"
+)
 
 
 async def _send_next_question(svc: Services, user_id: int, content_id: int) -> bool:
@@ -94,13 +118,7 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
 
     @router.message(Command("help"))
     async def on_help(message: Message) -> None:
-        lines = "\n".join(f"/{c} — {d}" for c, d in COMMANDS)
-        await message.answer(
-            "🎓 <b>TOEFL coach — commands</b>\n\n"
-            + lines
-            + "\n\nTip: tap “📖 Quiz me” under a delivered item for a comprehension quiz, "
-            "or send a voice message during /speak."
-        )
+        await message.answer(HELP_TEXT)
 
     @router.message(Command("speak"))
     async def on_speak(message: Message, state: FSMContext) -> None:
