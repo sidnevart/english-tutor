@@ -77,8 +77,11 @@ class Settings(BaseSettings):
     refresh_cron: str = "0 7 * * *"  # scrape channels + ingest podcasts (before morning push)
     morning_cron: str = "30 7 * * *"
     evening_cron: str = "0 20 * * *"
+    daytime_checkin_cron: str = "0 13 * * *"  # mid-day check-in (praise + nudge)
     morning_articles: int = 2  # how many articles to deliver each morning
     morning_podcasts: int = 2  # how many podcasts to deliver each morning
+    essay_cron: str = "0 18 * * 3,6"  # weekly essay reminder (Wed + Sat at 18:00)
+    weekly_summary_cron: str = "0 19 * * 0"  # weekly summary (Sunday at 19:00)
     flashcards_per_item: int = 8  # words+idioms Anki cards generated per delivered item
     db_path: str = "data/tutor.db"
     data_dir: str = "data"

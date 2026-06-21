@@ -22,6 +22,41 @@ from tutor.factory import Services
 from tutor.memory import Memory
 from tutor.render import render_card, render_score
 
+# Simple keyword-based topic inference (no LLM call needed).
+_TOPIC_KEYWORDS: dict[str, list[str]] = {
+    "science": ["science", "research", "study", "experiment", "biology", "physics", "chemistry",
+                 "climate", "environment", "ecology", "evolution", "genetics", "neuroscience"],
+    "technology": ["technology", "ai", "artificial intelligence", "software", "computer",
+                    "digital", "internet", "robot", "automation", "data", "algorithm"],
+    "economics": ["economy", "economic", "market", "trade", "finance", "inflation",
+                   "gdp", "recession", "investment", "stock", "banking", "fiscal"],
+    "politics": ["politics", "political", "government", "election", "democracy", "policy",
+                  "congress", "parliament", "legislation", "vote", "president", "minister"],
+    "health": ["health", "medical", "disease", "vaccine", "hospital", "doctor", "patient",
+                "therapy", "mental health", "nutrition", "exercise", "pandemic", "virus"],
+    "culture": ["culture", "art", "music", "film", "literature", "museum", "theater",
+                 "tradition", "festival", "heritage", "language", "religion"],
+    "education": ["education", "school", "university", "student", "teacher", "learning",
+                   "curriculum", "academic", "scholarship", "literacy", "pedagogy"],
+    "environment": ["environment", "climate", "pollution", "sustainability", "renewable",
+                     "carbon", "emissions", "conservation", "biodiversity", "deforestation"],
+    "society": ["society", "social", "community", "inequality", "poverty", "immigration",
+                 "urban", "rural", "demographics", "civil rights", "gender"],
+}
+
+
+def _infer_topic(title: str, body_text: str) -> str | None:
+    """Infer topic from title and body using keyword matching. Returns None if ambiguous."""
+    text = (title + " " + body_text[:500]).lower()
+    scores: dict[str, int] = {}
+    for topic, keywords in _TOPIC_KEYWORDS.items():
+        score = sum(1 for kw in keywords if kw in text)
+        if score > 0:
+            scores[topic] = score
+    if not scores:
+        return None
+    return max(scores, key=scores.get)  # type: ignore[arg-type]
+
 
 @dataclass
 class ReviewResult:
@@ -171,6 +206,12 @@ async def finalize_review(svc: Services, content_id: int, user_id: int) -> Revie
 
     # Accumulate today's vocabulary into the learner's recall memory.
     Memory(svc.settings.soul_dir, user_id).add_weak_words([v.word for v in vocab])
+
+    # Track topic progress from quiz score.
+    topic = _infer_topic(content.title, content.body_text)
+    if topic:
+        score = correct / len(quiz.questions) if quiz.questions else 0
+        svc.repo.record_topic_progress(user_id, topic, "quiz", content_id, score)
 
     return ReviewResult(content_id, correct, len(quiz.questions), anki)
 

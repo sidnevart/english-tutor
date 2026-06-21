@@ -12,9 +12,11 @@ from tutor.eval.schemas import ReadingQuizPayload
 from tutor.interfaces.llm import LLMClient
 
 _SYSTEM = (
-    "You are a TOEFL reading-comprehension coach. You write rigorous "
-    "multiple-choice questions that test main idea, inference, vocabulary in "
-    "context, and detail. Exactly one option is correct."
+    "You are a TOEFL reading-comprehension coach for a B2-C1 learner. You write "
+    "rigorous multiple-choice questions that test main idea, inference, vocabulary "
+    "in context, and detail. Questions should target C1-level comprehension: "
+    "inference, nuance, author's purpose, and vocabulary-in-context for academic "
+    "words. Exactly one option is correct."
 )
 
 

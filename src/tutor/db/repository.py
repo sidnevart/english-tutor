@@ -288,6 +288,197 @@ class Repository:
         )
         self.conn.commit()
 
+    # ---- session errors ----------------------------------------------------
+    def save_session_errors(
+        self, user_id: int, session_type: str, errors: list[dict[str, str]]
+    ) -> None:
+        """Persist errors extracted from a speaking/coach session feedback."""
+        for e in errors:
+            self.conn.execute(
+                """
+                INSERT INTO session_error
+                    (user_id, session_type, error_type, error_text, correction, context, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    user_id,
+                    session_type,
+                    e.get("type", "grammar"),
+                    e.get("error", ""),
+                    e.get("correction", ""),
+                    e.get("context", ""),
+                    _now(),
+                ),
+            )
+        self.conn.commit()
+
+    def recent_session_errors(
+        self, user_id: int, limit: int = 10, days: int = 1
+    ) -> list[dict[str, str]]:
+        """Return recent session errors for the user (last N days)."""
+        cutoff = datetime.now(UTC).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ).isoformat()
+        rows = self.conn.execute(
+            """
+            SELECT session_type, error_type, error_text, correction, context, created_at
+            FROM session_error
+            WHERE user_id = ? AND created_at >= ?
+            ORDER BY created_at DESC LIMIT ?
+            """,
+            (user_id, cutoff, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def top_session_errors(self, user_id: int, limit: int = 5) -> list[dict[str, object]]:
+        """Return the most frequent recurring errors across all sessions."""
+        rows = self.conn.execute(
+            """
+            SELECT error_type, error_text, correction, COUNT(*) as count
+            FROM session_error
+            WHERE user_id = ?
+            GROUP BY error_type, error_text
+            ORDER BY count DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_anki_cards_today(self, user_id: int) -> list[tuple[str, str]]:
+        """Return Anki cards from items delivered today only."""
+        today = datetime.now(UTC).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ).isoformat()
+        rows = self.conn.execute(
+            """
+            SELECT a.front, a.back FROM anki_card a
+            JOIN content_item ci ON ci.id = a.content_id
+            WHERE ci.user_id = ? AND ci.delivered_at >= ?
+            ORDER BY a.id DESC
+            """,
+            (user_id, today),
+        ).fetchall()
+        return [(r["front"], r["back"]) for r in rows]
+
+    # ---- essays -------------------------------------------------------------
+    def save_essay(
+        self, user_id: int, prompt: str, essay_text: str,
+        score: int | None, feedback: str, essay_type: str,
+    ) -> int:
+        cur = self.conn.execute(
+            """
+            INSERT INTO essay (user_id, prompt, essay_text, score, feedback, essay_type, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, prompt, essay_text, score, feedback, essay_type, _now()),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def recent_essays(self, user_id: int, limit: int = 5) -> list[dict[str, object]]:
+        rows = self.conn.execute(
+            """
+            SELECT id, prompt, essay_text, score, feedback, essay_type, created_at
+            FROM essay WHERE user_id = ?
+            ORDER BY created_at DESC LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def essay_count(self, user_id: int) -> int:
+        row = self.conn.execute(
+            "SELECT count(*) AS c FROM essay WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        return int(row["c"])
+
+    def last_essay_type(self, user_id: int) -> str | None:
+        """Return the essay_type of the most recent essay, or None."""
+        row = self.conn.execute(
+            "SELECT essay_type FROM essay WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        return row["essay_type"] if row else None
+
+    # ---- topic progress -----------------------------------------------------
+    def record_topic_progress(
+        self, user_id: int, topic: str, source_type: str,
+        source_id: int | None = None, score: float | None = None,
+    ) -> None:
+        """Record a topic interaction (quiz result, session, essay)."""
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO topic_progress
+                (user_id, topic, source_type, source_id, score, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, topic, source_type, source_id, score, _now()),
+        )
+        self.conn.commit()
+
+    def weak_topics(self, user_id: int, limit: int = 5) -> list[dict[str, object]]:
+        """Return topics with lowest average scores."""
+        rows = self.conn.execute(
+            """
+            SELECT topic, AVG(score) as avg_score, COUNT(*) as count
+            FROM topic_progress
+            WHERE user_id = ? AND score IS NOT NULL
+            GROUP BY topic
+            ORDER BY avg_score ASC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def strong_topics(self, user_id: int, limit: int = 5) -> list[dict[str, object]]:
+        """Return topics with highest average scores."""
+        rows = self.conn.execute(
+            """
+            SELECT topic, AVG(score) as avg_score, COUNT(*) as count
+            FROM topic_progress
+            WHERE user_id = ? AND score IS NOT NULL
+            GROUP BY topic
+            ORDER BY avg_score DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def practice_streak(self, user_id: int) -> int:
+        """Calculate consecutive days with at least one activity."""
+        rows = self.conn.execute(
+            """
+            SELECT DISTINCT DATE(day) as day FROM (
+                SELECT delivered_at as day FROM content_item
+                    WHERE user_id = ? AND delivered_at IS NOT NULL
+                UNION ALL
+                SELECT answered_at as day FROM attempt WHERE user_id = ?
+                UNION ALL
+                SELECT created_at as day FROM session_error WHERE user_id = ?
+                UNION ALL
+                SELECT created_at as day FROM essay WHERE user_id = ?
+            )
+            ORDER BY day DESC
+            """,
+            (user_id, user_id, user_id, user_id),
+        ).fetchall()
+        if not rows:
+            return 0
+        from datetime import datetime as dt, timedelta
+        streak = 0
+        today = dt.now(UTC).date()
+        for row in rows:
+            day = dt.fromisoformat(row["day"]).date()
+            expected = today - timedelta(days=streak)
+            if day == expected:
+                streak += 1
+            elif day < expected:
+                break
+        return streak
+
     # ---- progress tracking -------------------------------------------------
     def count_status(self, user_id: int, status: DeliveryStatus) -> int:
         row = self.conn.execute(

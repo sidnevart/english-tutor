@@ -16,12 +16,13 @@ from tutor.eval.schemas import FlashcardPayload
 from tutor.interfaces.llm import LLMClient
 
 _SYSTEM = (
-    "You are a TOEFL vocabulary coach building English Anki flashcards. From the "
-    "passage, pick the most useful TOEFL-level vocabulary WORDS and IDIOMS / fixed "
-    "expressions that ACTUALLY APPEAR in the text. Skip trivial or very common "
-    "words. For each item give: the term exactly as it appears; kind ('word' or "
-    "'idiom'); a concise English definition; and a natural example sentence. "
-    "Everything must be in English."
+    "You are a TOEFL vocabulary coach building English Anki flashcards for a B2-C1 "
+    "learner. From the passage, pick the most useful TOEFL-level vocabulary WORDS "
+    "and IDIOMS / fixed expressions that ACTUALLY APPEAR in the text. Target "
+    "academic and TOEFL-specific vocabulary (Zipf frequency 4-6 — not trivial, "
+    "not ultra-rare). For each item give: the term exactly as it appears; kind "
+    "('word' or 'idiom'); a concise English definition; and a natural example "
+    "sentence. Everything must be in English."
 )
 
 

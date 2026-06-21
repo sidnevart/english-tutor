@@ -92,6 +92,45 @@ CREATE TABLE IF NOT EXISTS schedule_log (
 
 -- Defense-in-depth: reject illegal content_item status transitions at the DB
 -- layer, mirroring LEGAL_TRANSITIONS in domain/enums.py.
+
+CREATE TABLE IF NOT EXISTS session_error (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL,
+    session_type TEXT NOT NULL,                     -- speak | discuss | coach
+    error_type  TEXT NOT NULL,                      -- grammar | vocab | phrasing
+    error_text  TEXT NOT NULL,
+    correction  TEXT NOT NULL,
+    context     TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_session_error_user ON session_error (user_id, created_at);
+
+CREATE TABLE IF NOT EXISTS essay (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL,
+    prompt      TEXT NOT NULL,
+    essay_text  TEXT NOT NULL,
+    score       INTEGER,                            -- 1-5 TOEFL scale
+    feedback    TEXT NOT NULL,
+    essay_type  TEXT NOT NULL,                       -- independent | integrated | email
+    created_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_essay_user ON essay (user_id, created_at);
+
+CREATE TABLE IF NOT EXISTS topic_progress (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL,
+    topic       TEXT NOT NULL,                       -- e.g. "science", "economics", "culture"
+    source_type TEXT NOT NULL,                       -- quiz | session | essay
+    source_id   INTEGER,                             -- content_id or session id
+    score       REAL,                                -- 0.0-1.0 (quiz % or qualitative)
+    created_at  TEXT NOT NULL,
+    UNIQUE (user_id, topic, source_type, source_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_topic_user ON topic_progress (user_id, topic);
 CREATE TRIGGER IF NOT EXISTS trg_content_status_guard
 BEFORE UPDATE OF status ON content_item
 FOR EACH ROW

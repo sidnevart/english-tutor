@@ -88,5 +88,8 @@ async def test_build_scheduler_registers_jobs(tmp_path):
         assert {j.id for j in scheduler.get_jobs()} == {
             "refresh_content",
             "morning_push",
+            "daytime_checkin",
             "evening_reminder",
+            "essay_reminder",
+            "weekly_summary",
         }
