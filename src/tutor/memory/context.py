@@ -19,16 +19,18 @@ The profile includes:
 from __future__ import annotations
 
 from tutor.db.repository import Repository
-from tutor.domain.enums import DeliveryStatus
+from tutor.domain.enums import DeliveryStatus, QuizKind
 from tutor.memory.recall import Memory
 
 
-def build_learner_context(repo: Repository, user_id: int, soul_dir: str) -> str:
+def build_learner_context(
+    repo: Repository, user_id: int, soul_dir: str
+) -> str:
     """Build a comprehensive learner profile string for LLM prompts.
 
-    This is the "DB access" layer — instead of MCP tools, we compute everything
-    upfront and inject it as structured context. The LLM sees the same data it
-    would get from querying, but without needing tool-use capabilities.
+    This is the "DB access" layer — instead of MCP tools, we compute
+    everything upfront and inject it as structured context. The LLM sees
+    the same data it would get from querying, but without needing tools.
     """
     parts: list[str] = []
 
@@ -42,29 +44,38 @@ def build_learner_context(repo: Repository, user_id: int, soul_dir: str) -> str:
     parts.append(
         f"LEARNER STATUS:\n"
         f"- Practice streak: {streak} day(s)\n"
-        f"- Content: {new_count} queued, {delivered_count} awaiting review, {reviewed_count} completed\n"
+        f"- Content: {new_count} queued, "
+        f"{delivered_count} awaiting review, "
+        f"{reviewed_count} completed\n"
         f"- Anki cards: {cards} total"
     )
 
     # ---- Today's delivered content (not yet quizzed) ----
-    delivered = repo.fetch_by_status(user_id, DeliveryStatus.DELIVERED, limit=10)
+    delivered = repo.fetch_by_status(
+        user_id, DeliveryStatus.DELIVERED, limit=10
+    )
     if delivered:
         items = []
         for it in delivered:
-            kind = "🎧 podcast" if it.content_type.value == "podcast" else "📰 article"
+            kind = (
+                "🎧 podcast"
+                if it.content_type.value == "podcast"
+                else "📰 article"
+            )
             title = it.title or "Untitled"
             items.append(f"  - {kind}: {title}")
         parts.append("CONTENT AWAITING REVIEW:\n" + "\n".join(items))
 
     # ---- Recently reviewed content ----
-    reviewed = repo.fetch_by_status(user_id, DeliveryStatus.REVIEWED, limit=5)
+    reviewed = repo.fetch_by_status(
+        user_id, DeliveryStatus.REVIEWED, limit=5
+    )
     if reviewed:
         items = []
         for it in reviewed:
             kind = "🎧" if it.content_type.value == "podcast" else "📰"
             title = it.title or "Untitled"
-            # Get quiz score if available
-            quiz = repo.get_quiz(it.id, __import__("tutor.domain.enums", fromlist=["QuizKind"]).QuizKind.READING)
+            quiz = repo.get_quiz(it.id, QuizKind.READING)
             score_str = ""
             if quiz:
                 attempts = repo.attempts_for_content(it.id, user_id)
@@ -77,13 +88,24 @@ def build_learner_context(repo: Repository, user_id: int, soul_dir: str) -> str:
     # ---- Recent session errors ----
     recent_errors = repo.recent_session_errors(user_id, limit=5)
     if recent_errors:
-        lines = [f"  - {e['error_text']} → {e['correction']} ({e['session_type']})" for e in recent_errors]
-        parts.append("RECENT ERRORS (from today's sessions):\n" + "\n".join(lines))
+        lines = [
+            f"  - {e['error_text']} → {e['correction']} "
+            f"({e['session_type']})"
+            for e in recent_errors
+        ]
+        parts.append(
+            "RECENT ERRORS (from today's sessions):\n"
+            + "\n".join(lines)
+        )
 
     # ---- Recurring errors ----
     top_errors = repo.top_session_errors(user_id, limit=5)
     if top_errors:
-        lines = [f"  - \"{e['error_text']}\" → \"{e['correction']}\" ({e['count']}x)" for e in top_errors]
+        lines = [
+            f"  - \"{e['error_text']}\" → \"{e['correction']}\" "
+            f"({e['count']}x)"
+            for e in top_errors
+        ]
         parts.append("RECURRING ERRORS:\n" + "\n".join(lines))
 
     # ---- Weak/strong vocabulary ----
@@ -96,10 +118,18 @@ def build_learner_context(repo: Repository, user_id: int, soul_dir: str) -> str:
     weak_topics = repo.weak_topics(user_id, limit=3)
     strong_topics = repo.strong_topics(user_id, limit=3)
     if weak_topics:
-        lines = [f"  - {t['topic']}: {round(t['avg_score']*100)}% ({t['count']} attempts)" for t in weak_topics]
+        lines = [
+            f"  - {t['topic']}: {round(t['avg_score'] * 100)}% "
+            f"({t['count']} attempts)"
+            for t in weak_topics
+        ]
         parts.append("WEAKEST TOPICS:\n" + "\n".join(lines))
     if strong_topics:
-        lines = [f"  - {t['topic']}: {round(t['avg_score']*100)}% ({t['count']} attempts)" for t in strong_topics]
+        lines = [
+            f"  - {t['topic']}: {round(t['avg_score'] * 100)}% "
+            f"({t['count']} attempts)"
+            for t in strong_topics
+        ]
         parts.append("STRONGEST TOPICS:\n" + "\n".join(lines))
 
     # ---- Essay history ----
@@ -110,6 +140,8 @@ def build_learner_context(repo: Repository, user_id: int, soul_dir: str) -> str:
         for e in recent_essays:
             score = f"{e['score']}/5" if e['score'] else "unscored"
             lines.append(f"  - {e['essay_type']}: {score}")
-        parts.append(f"ESSAYS ({essay_count} total):\n" + "\n".join(lines))
+        parts.append(
+            f"ESSAYS ({essay_count} total):\n" + "\n".join(lines)
+        )
 
     return "\n\n".join(parts)

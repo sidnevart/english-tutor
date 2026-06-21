@@ -467,7 +467,8 @@ class Repository:
         ).fetchall()
         if not rows:
             return 0
-        from datetime import datetime as dt, timedelta
+        from datetime import datetime as dt
+        from datetime import timedelta
         streak = 0
         today = dt.now(UTC).date()
         for row in rows:

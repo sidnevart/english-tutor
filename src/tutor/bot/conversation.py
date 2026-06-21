@@ -8,14 +8,12 @@ voice note (Groq Orpheus); a TTS failure degrades to text only.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-from tutor.domain.enums import DeliveryStatus
 from tutor.eval.essay import evaluate_essay, generate_essay_prompt, next_essay_type
 from tutor.eval.schemas import SessionFeedbackPayload
 from tutor.factory import Services
@@ -355,9 +353,13 @@ async def end_session(svc: Services, user_id: int, state: FSMContext) -> None:
     top_errors = svc.repo.top_session_errors(user_id, limit=5)
     errors_context = ""
     if top_errors:
+        err_lines = [
+            f"- {e['error_text']} → {e['correction']} ({e['count']}x)"
+            for e in top_errors
+        ]
         errors_context = (
             "\n\nThe learner's recurring errors to check against:\n"
-            + "\n".join(f"- {e['error_text']} → {e['correction']} ({e['count']}x)" for e in top_errors)
+            + "\n".join(err_lines)
         )
 
     system = _ANTI_INJECTION + "\n\n" + Memory(svc.settings.soul_dir, user_id).persona() + (

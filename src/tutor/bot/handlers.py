@@ -266,8 +266,13 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         ]
 
         if top_errors:
-            lines = [f"  • \"{e['error_text']}\" → \"{e['correction']}\" ({e['count']}x)" for e in top_errors]
-            parts.append("\n<b>🔄 Recurring errors:</b>\n" + "\n".join(lines))
+            lines = [
+                f"  • \"{e['error_text']}\" → \"{e['correction']}\" ({e['count']}x)"
+                for e in top_errors
+            ]
+            parts.append(
+                "\n<b>🔄 Recurring errors:</b>\n" + "\n".join(lines)
+            )
 
         if weak:
             parts.append("\n<b>📉 Weakest topics:</b>")

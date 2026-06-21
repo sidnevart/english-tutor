@@ -11,7 +11,7 @@ The learning loop:
 
 from __future__ import annotations
 
-from tutor.bot.keyboards import evening_actions, quiz_invite
+from tutor.bot.keyboards import evening_actions
 from tutor.domain.enums import ContentType, DeliveryStatus
 from tutor.factory import Services
 from tutor.pipeline import deliver_new
@@ -43,9 +43,15 @@ async def morning_push(svc: Services, user_id: int) -> list[int]:
     with its words+idioms Anki deck. Podcasts are never crowded out by articles."""
     try:
         delivered: list[int] = []
-        delivered += await deliver_new(svc, user_id, svc.settings.morning_articles, ContentType.ARTICLE)
-        delivered += await deliver_new(svc, user_id, svc.settings.morning_podcasts, ContentType.PODCAST)
-        svc.repo.log_job("morning_push", "ok", f"delivered {len(delivered)}")
+        delivered += await deliver_new(
+            svc, user_id, svc.settings.morning_articles, ContentType.ARTICLE
+        )
+        delivered += await deliver_new(
+            svc, user_id, svc.settings.morning_podcasts, ContentType.PODCAST
+        )
+        svc.repo.log_job(
+            "morning_push", "ok", f"delivered {len(delivered)}"
+        )
         return delivered
     except Exception as exc:  # noqa: BLE001
         svc.repo.log_job("morning_push", "error", str(exc)[:200])
@@ -99,9 +105,9 @@ async def daytime_checkin(svc: Services, user_id: int) -> None:
         if delivered:
             parts.append(f"\n📋 <b>Still waiting for you ({len(delivered)}):</b>")
             for it in delivered[:3]:
-                kind = "🎧" if it.content_type == ContentType.PODCAST else "📰"
+                is_pod = it.content_type == ContentType.PODCAST
+                kind = "🎧" if is_pod else "📰"
                 title = it.title or "Untitled"
-                label = "🎧 Listening quiz" if it.content_type == ContentType.PODCAST else "📖 Quiz me"
                 parts.append(f"  {kind} {title}")
             if len(delivered) > 3:
                 parts.append(f"  ... and {len(delivered) - 3} more")
@@ -119,7 +125,8 @@ async def daytime_checkin(svc: Services, user_id: int) -> None:
         # Add keyboard with quiz buttons for unreviewed items.
         keyboard = []
         for it in delivered[:2]:
-            label = "🎧 Listening quiz" if it.content_type == ContentType.PODCAST else "📖 Quiz me"
+            is_pod = it.content_type == ContentType.PODCAST
+            label = "🎧 Listening quiz" if is_pod else "📖 Quiz me"
             keyboard.append([(label, f"quiz:{it.id}")])
 
         await svc.notifier.send(
@@ -127,7 +134,10 @@ async def daytime_checkin(svc: Services, user_id: int) -> None:
             "\n".join(parts),
             keyboard=keyboard if keyboard else None,
         )
-        svc.repo.log_job("daytime_checkin", "ok", f"reviewed={len(reviewed)} delivered={len(delivered)}")
+        svc.repo.log_job(
+            "daytime_checkin", "ok",
+            f"reviewed={len(reviewed)} delivered={len(delivered)}"
+        )
     except Exception as exc:  # noqa: BLE001
         svc.repo.log_job("daytime_checkin", "error", str(exc)[:200])
 
