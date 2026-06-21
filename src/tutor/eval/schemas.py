@@ -14,3 +14,7 @@ class QuestionPayload(BaseModel):
 
 class ReadingQuizPayload(BaseModel):
     questions: list[QuestionPayload] = Field(min_length=1)
+
+
+class CleanedTranscript(BaseModel):
+    content: str

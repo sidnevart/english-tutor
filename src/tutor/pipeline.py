@@ -14,6 +14,7 @@ from tutor.domain.models import AnkiResult, Quiz
 from tutor.eval.anki_cards import build_cards
 from tutor.eval.grader import is_correct
 from tutor.eval.quiz_builder import build_reading_quiz
+from tutor.eval.transcript import clean_transcript
 from tutor.eval.vocab import select_vocab
 from tutor.factory import Services
 from tutor.memory import Memory
@@ -53,6 +54,7 @@ async def ensure_transcript(svc: Services, content_id: int) -> str:
         return content.body_text
     audio = await _resolve_audio(content.audio_url, svc.settings.data_path / f"audio_{content_id}")
     text = await svc.transcriber.transcribe(audio, lang=content.lang)
+    text = await clean_transcript(svc.llm, text)  # strip ads / intros via LLM
     svc.repo.set_body_text(content_id, text)
     # Clean up audio we downloaded (leave caller-provided local files alone).
     if audio.name.startswith(f"audio_{content_id}") and audio.exists():
