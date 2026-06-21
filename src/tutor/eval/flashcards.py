@@ -16,12 +16,12 @@ from tutor.eval.schemas import FlashcardPayload
 from tutor.interfaces.llm import LLMClient
 
 _SYSTEM = (
-    "You are a TOEFL vocabulary coach building Anki flashcards for a "
-    "Russian-speaking learner. From the passage, pick the most useful TOEFL-level "
-    "vocabulary WORDS and IDIOMS / fixed expressions that ACTUALLY APPEAR in the "
-    "text. Skip trivial or very common words. For each item give: the term exactly "
-    "as it appears; kind ('word' or 'idiom'); a concise English definition; a "
-    "natural example sentence; and an accurate Russian translation."
+    "You are a TOEFL vocabulary coach building English Anki flashcards. From the "
+    "passage, pick the most useful TOEFL-level vocabulary WORDS and IDIOMS / fixed "
+    "expressions that ACTUALLY APPEAR in the text. Skip trivial or very common "
+    "words. For each item give: the term exactly as it appears; kind ('word' or "
+    "'idiom'); a concise English definition; and a natural example sentence. "
+    "Everything must be in English."
 )
 
 
@@ -55,8 +55,6 @@ async def make_flashcards(llm: LLMClient, text: str, *, limit: int = 8) -> list[
         back = fc.definition.strip()
         if fc.example.strip():
             back += f"\n\n<i>{fc.example.strip()}</i>"
-        if fc.translation.strip():
-            back += f"\n\n🇷🇺 {fc.translation.strip()}"
         tag = "idiom" if fc.kind.strip().lower() == "idiom" else "vocab"
         cards.append(Card(front=term, back=back, tags=["toefl", tag]))
         if len(cards) >= limit:

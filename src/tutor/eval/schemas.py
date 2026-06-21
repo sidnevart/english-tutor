@@ -25,7 +25,6 @@ class Flashcard(BaseModel):
     kind: str = "word"  # "word" | "idiom"
     definition: str  # concise English definition
     example: str = ""  # a natural example sentence
-    translation: str = ""  # Russian translation
 
 
 class FlashcardPayload(BaseModel):

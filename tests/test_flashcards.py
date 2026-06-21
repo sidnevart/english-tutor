@@ -24,21 +24,9 @@ class FakeLLM:
 
 async def test_keeps_in_text_terms_drops_hallucinations_tags_idioms():
     cards = [
-        Flashcard(
-            term="ubiquitous",
-            kind="word",
-            definition="present everywhere",
-            translation="вездесущий",
-        ),
-        Flashcard(
-            term="bite the bullet",
-            kind="idiom",
-            definition="face a hardship",
-            translation="стиснуть зубы",
-        ),
-        Flashcard(
-            term="quantum", kind="word", definition="not in the passage", translation="квант"
-        ),
+        Flashcard(term="ubiquitous", kind="word", definition="present everywhere"),
+        Flashcard(term="bite the bullet", kind="idiom", definition="face a hardship"),
+        Flashcard(term="quantum", kind="word", definition="not in the passage"),
     ]
     out = await make_flashcards(FakeLLM(cards), TEXT, limit=8)
     fronts = [c.front for c in out]
@@ -51,7 +39,7 @@ async def test_keeps_in_text_terms_drops_hallucinations_tags_idioms():
     assert "idiom" in idiom.tags
     word = next(c for c in out if c.front == "ubiquitous")
     assert "present everywhere" in word.back
-    assert "вездесущий" in word.back  # Russian translation on the back
+    assert "🇷🇺" not in word.back  # English-only cards, no translation
 
 
 async def test_dedups_repeated_terms():

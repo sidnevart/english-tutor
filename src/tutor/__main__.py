@@ -60,10 +60,8 @@ def _run_eval_cards() -> int:
             cards = await make_flashcards(llm, text, limit=6)
             in_text = sum(1 for c in cards if _present(c.front, text))
             idioms = sum(1 for c in cards if "idiom" in c.tags)
-            ru = sum(1 for c in cards if "🇷🇺" in c.back)
             print(
-                f"\n[{name}] {len(cards)} cards | in-text {in_text}/{len(cards)} | "
-                f"idioms {idioms} | with-RU {ru}"
+                f"\n[{name}] {len(cards)} cards | in-text {in_text}/{len(cards)} | idioms {idioms}"
             )
             for c in cards:
                 tag = "idiom" if "idiom" in c.tags else "word "
