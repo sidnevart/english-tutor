@@ -35,6 +35,18 @@ _COACH_SYSTEM_SUFFIX = (
     "\n\nReply conversationally, keep it short, and gently correct the learner's English."
 )
 
+# Single source of truth for the slash menu (set_my_commands) and /help.
+COMMANDS: list[tuple[str, str]] = [
+    ("start", "Today's material + quiz"),
+    ("next", "Next reading or episode"),
+    ("speak", "Speaking practice (voice)"),
+    ("stop", "End the current practice session"),
+    ("coach", "Ask a quick question"),
+    ("cards", "Re-send your Anki deck"),
+    ("progress", "Your stats"),
+    ("help", "Show available commands"),
+]
+
 
 async def _send_next_question(svc: Services, user_id: int, content_id: int) -> bool:
     quiz = svc.repo.get_quiz(content_id, QuizKind.READING)
@@ -79,6 +91,16 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         )
         if not await deliver_new(svc, user, limit=1):
             await message.answer("No new material right now. Try /next later.")
+
+    @router.message(Command("help"))
+    async def on_help(message: Message) -> None:
+        lines = "\n".join(f"/{c} — {d}" for c, d in COMMANDS)
+        await message.answer(
+            "🎓 <b>TOEFL coach — commands</b>\n\n"
+            + lines
+            + "\n\nTip: tap “📖 Quiz me” under a delivered item for a comprehension quiz, "
+            "or send a voice message during /speak."
+        )
 
     @router.message(Command("speak"))
     async def on_speak(message: Message, state: FSMContext) -> None:

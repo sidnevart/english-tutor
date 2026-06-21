@@ -6,7 +6,7 @@ import logging
 
 from tutor.adapters.notify.telegram import TelegramNotifier
 from tutor.app import open_services
-from tutor.bot.handlers import build_router
+from tutor.bot.handlers import COMMANDS, build_router
 from tutor.config import Settings, get_settings
 from tutor.scheduler.runner import build_scheduler
 
@@ -26,6 +26,7 @@ async def run_bot(settings: Settings | None = None) -> None:
     from aiogram import Bot, Dispatcher
     from aiogram.client.default import DefaultBotProperties
     from aiogram.enums import ParseMode
+    from aiogram.types import BotCommand
 
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
@@ -33,6 +34,9 @@ async def run_bot(settings: Settings | None = None) -> None:
         # Share the polling bot for outbound sends (deliveries, decks, scores).
         svc.notifier = TelegramNotifier(bot)
         dp.include_router(build_router(svc, bot))
+
+        # The slash menu shown when the user types "/".
+        await bot.set_my_commands([BotCommand(command=c, description=d) for c, d in COMMANDS])
 
         scheduler = build_scheduler(svc, settings.admin_user_id)
         scheduler.start()
