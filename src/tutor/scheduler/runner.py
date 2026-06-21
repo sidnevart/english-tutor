@@ -78,12 +78,13 @@ def build_scheduler(svc: Services, user_id: int) -> AsyncIOScheduler:
     reviewed_count = svc.repo.count_status(user_id, DeliveryStatus.REVIEWED)
     cards = svc.repo.anki_card_count(user_id)
     svc.repo.log_job(
-        "scheduler_start", "ok",
+        "scheduler_start",
+        "ok",
         f"content: new={new_count} delivered={delivered_count} reviewed={reviewed_count} "
         f"cards={cards} | crons: refresh={svc.settings.refresh_cron} "
         f"morning={svc.settings.morning_cron} daytime={svc.settings.daytime_checkin_cron} "
         f"evening={svc.settings.evening_cron} essay={svc.settings.essay_cron} "
-        f"weekly={svc.settings.weekly_summary_cron} tz={svc.settings.tz}"
+        f"weekly={svc.settings.weekly_summary_cron} tz={svc.settings.tz}",
     )
 
     return scheduler

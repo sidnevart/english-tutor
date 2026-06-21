@@ -49,9 +49,7 @@ async def morning_push(svc: Services, user_id: int) -> list[int]:
         delivered += await deliver_new(
             svc, user_id, svc.settings.morning_podcasts, ContentType.PODCAST
         )
-        svc.repo.log_job(
-            "morning_push", "ok", f"delivered {len(delivered)}"
-        )
+        svc.repo.log_job("morning_push", "ok", f"delivered {len(delivered)}")
         return delivered
     except Exception as exc:  # noqa: BLE001
         svc.repo.log_job("morning_push", "error", str(exc)[:200])
@@ -77,10 +75,10 @@ async def daytime_checkin(svc: Services, user_id: int) -> None:
         if reviewed:
             # Filter to today's reviewed items.
             from datetime import UTC, datetime
+
             today = datetime.now(UTC).date()
             today_reviewed = [
-                it for it in reviewed
-                if it.reviewed_at and it.reviewed_at.date() == today
+                it for it in reviewed if it.reviewed_at and it.reviewed_at.date() == today
             ]
             if today_reviewed:
                 parts.append("🎉 <b>Great work today!</b>\n")
@@ -89,6 +87,7 @@ async def daytime_checkin(svc: Services, user_id: int) -> None:
                     title = it.title or "Untitled"
                     # Get quiz score.
                     from tutor.domain.enums import QuizKind
+
                     quiz = svc.repo.get_quiz(it.id, QuizKind.READING)
                     score_str = ""
                     if quiz:
@@ -135,8 +134,7 @@ async def daytime_checkin(svc: Services, user_id: int) -> None:
             keyboard=keyboard if keyboard else None,
         )
         svc.repo.log_job(
-            "daytime_checkin", "ok",
-            f"reviewed={len(reviewed)} delivered={len(delivered)}"
+            "daytime_checkin", "ok", f"reviewed={len(reviewed)} delivered={len(delivered)}"
         )
     except Exception as exc:  # noqa: BLE001
         svc.repo.log_job("daytime_checkin", "error", str(exc)[:200])
@@ -206,13 +204,14 @@ async def essay_reminder(svc: Services, user_id: int) -> None:
         essay_count = svc.repo.essay_count(user_id)
         last_type = svc.repo.last_essay_type(user_id)
         from tutor.eval.essay import next_essay_type
+
         next_type = next_essay_type(last_type)
         await svc.notifier.send(
             user_id,
             f"📝 <b>Weekly writing practice</b>\n\n"
             f"You've written {essay_count} essay(s) so far. "
             f"This week's type: <b>{next_type.title()}</b>.\n\n"
-            f"Use /write to start your TOEFL essay practice!"
+            f"Use /write to start your TOEFL essay practice!",
         )
         svc.repo.log_job("essay_reminder", "ok", f"count={essay_count} next_type={next_type}")
     except Exception as exc:  # noqa: BLE001
@@ -255,7 +254,7 @@ async def weekly_summary(svc: Services, user_id: int) -> None:
         if top_errors:
             parts.append("\n<b>🔄 Top recurring errors:</b>")
             for e in top_errors:
-                parts.append(f"  • \"{e['error_text']}\" → \"{e['correction']}\" ({e['count']}x)")
+                parts.append(f'  • "{e["error_text"]}" → "{e["correction"]}" ({e["count"]}x)')
 
         parts.append(
             "\n<b>💡 Recommendations:</b>\n"

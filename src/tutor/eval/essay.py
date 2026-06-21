@@ -19,22 +19,22 @@ _INDEPENDENT_SYSTEM = (
     "You are a TOEFL writing instructor. Generate an Independent Writing task: "
     "a clear opinion prompt (agree/disagree or preference) on an academic or "
     "societal topic. The prompt should be 1-2 sentences, suitable for a 30-minute "
-    "essay of 300+ words. Return JSON: {\"prompt\": \"...\", \"type\": \"independent\"}."
+    'essay of 300+ words. Return JSON: {"prompt": "...", "type": "independent"}.'
 )
 
 _INTEGRATED_SYSTEM = (
     "You are a TOEFL writing instructor. Generate an Integrated Writing task: "
     "provide a short academic passage (150-200 words) on a topic, then ask the "
     "learner to summarize the main points and explain how they relate to a "
-    "hypothetical lecture. Return JSON: {\"prompt\": \"...\", \"passage\": \"...\", "
-    "\"type\": \"integrated\"}."
+    'hypothetical lecture. Return JSON: {"prompt": "...", "passage": "...", '
+    '"type": "integrated"}.'
 )
 
 _EMAIL_SYSTEM = (
     "You are a TOEFL writing instructor. Generate an Academic Discussion task: "
     "present a class discussion thread with 2 student opinions, then ask the "
     "learner to contribute their own opinion (100+ words). Return JSON: "
-    "{\"prompt\": \"...\", \"type\": \"email\"}."
+    '{"prompt": "...", "type": "email"}.'
 )
 
 _EVAL_SYSTEM = (
@@ -90,9 +90,5 @@ async def evaluate_essay(
     llm: LLMClient, prompt: str, essay_text: str, essay_type: str
 ) -> EssayEvalPayload:
     """Evaluate a TOEFL essay and return structured feedback."""
-    user = (
-        f"ESSAY TYPE: {essay_type}\n\n"
-        f"PROMPT:\n{prompt}\n\n"
-        f"STUDENT ESSAY:\n{essay_text}"
-    )
+    user = f"ESSAY TYPE: {essay_type}\n\nPROMPT:\n{prompt}\n\nSTUDENT ESSAY:\n{essay_text}"
     return await llm.complete_json(_EVAL_SYSTEM, user, EssayEvalPayload)

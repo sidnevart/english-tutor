@@ -23,9 +23,7 @@ from tutor.domain.enums import DeliveryStatus, QuizKind
 from tutor.memory.recall import Memory
 
 
-def build_learner_context(
-    repo: Repository, user_id: int, soul_dir: str
-) -> str:
+def build_learner_context(repo: Repository, user_id: int, soul_dir: str) -> str:
     """Build a comprehensive learner profile string for LLM prompts.
 
     This is the "DB access" layer — instead of MCP tools, we compute
@@ -51,25 +49,17 @@ def build_learner_context(
     )
 
     # ---- Today's delivered content (not yet quizzed) ----
-    delivered = repo.fetch_by_status(
-        user_id, DeliveryStatus.DELIVERED, limit=10
-    )
+    delivered = repo.fetch_by_status(user_id, DeliveryStatus.DELIVERED, limit=10)
     if delivered:
         items = []
         for it in delivered:
-            kind = (
-                "🎧 podcast"
-                if it.content_type.value == "podcast"
-                else "📰 article"
-            )
+            kind = "🎧 podcast" if it.content_type.value == "podcast" else "📰 article"
             title = it.title or "Untitled"
             items.append(f"  - {kind}: {title}")
         parts.append("CONTENT AWAITING REVIEW:\n" + "\n".join(items))
 
     # ---- Recently reviewed content ----
-    reviewed = repo.fetch_by_status(
-        user_id, DeliveryStatus.REVIEWED, limit=5
-    )
+    reviewed = repo.fetch_by_status(user_id, DeliveryStatus.REVIEWED, limit=5)
     if reviewed:
         items = []
         for it in reviewed:
@@ -89,22 +79,16 @@ def build_learner_context(
     recent_errors = repo.recent_session_errors(user_id, limit=5)
     if recent_errors:
         lines = [
-            f"  - {e['error_text']} → {e['correction']} "
-            f"({e['session_type']})"
+            f"  - {e['error_text']} → {e['correction']} ({e['session_type']})"
             for e in recent_errors
         ]
-        parts.append(
-            "RECENT ERRORS (from today's sessions):\n"
-            + "\n".join(lines)
-        )
+        parts.append("RECENT ERRORS (from today's sessions):\n" + "\n".join(lines))
 
     # ---- Recurring errors ----
     top_errors = repo.top_session_errors(user_id, limit=5)
     if top_errors:
         lines = [
-            f"  - \"{e['error_text']}\" → \"{e['correction']}\" "
-            f"({e['count']}x)"
-            for e in top_errors
+            f'  - "{e["error_text"]}" → "{e["correction"]}" ({e["count"]}x)' for e in top_errors
         ]
         parts.append("RECURRING ERRORS:\n" + "\n".join(lines))
 
@@ -119,15 +103,13 @@ def build_learner_context(
     strong_topics = repo.strong_topics(user_id, limit=3)
     if weak_topics:
         lines = [
-            f"  - {t['topic']}: {round(t['avg_score'] * 100)}% "
-            f"({t['count']} attempts)"
+            f"  - {t['topic']}: {round(t['avg_score'] * 100)}% ({t['count']} attempts)"
             for t in weak_topics
         ]
         parts.append("WEAKEST TOPICS:\n" + "\n".join(lines))
     if strong_topics:
         lines = [
-            f"  - {t['topic']}: {round(t['avg_score'] * 100)}% "
-            f"({t['count']} attempts)"
+            f"  - {t['topic']}: {round(t['avg_score'] * 100)}% ({t['count']} attempts)"
             for t in strong_topics
         ]
         parts.append("STRONGEST TOPICS:\n" + "\n".join(lines))
@@ -138,10 +120,8 @@ def build_learner_context(
         recent_essays = repo.recent_essays(user_id, limit=3)
         lines = []
         for e in recent_essays:
-            score = f"{e['score']}/5" if e['score'] else "unscored"
+            score = f"{e['score']}/5" if e["score"] else "unscored"
             lines.append(f"  - {e['essay_type']}: {score}")
-        parts.append(
-            f"ESSAYS ({essay_count} total):\n" + "\n".join(lines)
-        )
+        parts.append(f"ESSAYS ({essay_count} total):\n" + "\n".join(lines))
 
     return "\n\n".join(parts)

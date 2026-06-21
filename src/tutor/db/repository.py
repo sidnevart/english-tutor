@@ -316,9 +316,7 @@ class Repository:
         self, user_id: int, limit: int = 10, days: int = 1
     ) -> list[dict[str, str]]:
         """Return recent session errors for the user (last N days)."""
-        cutoff = datetime.now(UTC).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        ).isoformat()
+        cutoff = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
         rows = self.conn.execute(
             """
             SELECT session_type, error_type, error_text, correction, context, created_at
@@ -347,9 +345,7 @@ class Repository:
 
     def get_anki_cards_today(self, user_id: int) -> list[tuple[str, str]]:
         """Return Anki cards from items delivered today only."""
-        today = datetime.now(UTC).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        ).isoformat()
+        today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
         rows = self.conn.execute(
             """
             SELECT a.front, a.back FROM anki_card a
@@ -363,8 +359,13 @@ class Repository:
 
     # ---- essays -------------------------------------------------------------
     def save_essay(
-        self, user_id: int, prompt: str, essay_text: str,
-        score: int | None, feedback: str, essay_type: str,
+        self,
+        user_id: int,
+        prompt: str,
+        essay_text: str,
+        score: int | None,
+        feedback: str,
+        essay_type: str,
     ) -> int:
         cur = self.conn.execute(
             """
@@ -403,8 +404,12 @@ class Repository:
 
     # ---- topic progress -----------------------------------------------------
     def record_topic_progress(
-        self, user_id: int, topic: str, source_type: str,
-        source_id: int | None = None, score: float | None = None,
+        self,
+        user_id: int,
+        topic: str,
+        source_type: str,
+        source_id: int | None = None,
+        score: float | None = None,
     ) -> None:
         """Record a topic interaction (quiz result, session, essay)."""
         self.conn.execute(
@@ -469,6 +474,7 @@ class Repository:
             return 0
         from datetime import datetime as dt
         from datetime import timedelta
+
         streak = 0
         today = dt.now(UTC).date()
         for row in rows:
