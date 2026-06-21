@@ -288,6 +288,31 @@ class Repository:
         )
         self.conn.commit()
 
+    # ---- progress tracking -------------------------------------------------
+    def count_status(self, user_id: int, status: DeliveryStatus) -> int:
+        row = self.conn.execute(
+            "SELECT count(*) AS c FROM content_item WHERE user_id = ? AND status = ?",
+            (user_id, status.value),
+        ).fetchone()
+        return int(row["c"])
+
+    def anki_card_count(self, user_id: int) -> int:
+        row = self.conn.execute(
+            "SELECT count(*) AS c FROM anki_card a "
+            "JOIN content_item ci ON ci.id = a.content_id WHERE ci.user_id = ?",
+            (user_id,),
+        ).fetchone()
+        return int(row["c"])
+
+    def get_anki_cards(self, user_id: int, limit: int = 300) -> list[tuple[str, str]]:
+        rows = self.conn.execute(
+            "SELECT a.front, a.back FROM anki_card a "
+            "JOIN content_item ci ON ci.id = a.content_id WHERE ci.user_id = ? "
+            "ORDER BY a.id DESC LIMIT ?",
+            (user_id, limit),
+        ).fetchall()
+        return [(r["front"], r["back"]) for r in rows]
+
     # ---- helpers -----------------------------------------------------------
     @staticmethod
     def _to_content(row: sqlite3.Row) -> ContentItem:

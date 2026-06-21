@@ -83,12 +83,14 @@ def build_transcriber(settings: Settings) -> Transcriber:
 
 
 def build_synthesizer(settings: Settings) -> Synthesizer:
-    if settings.tts_backend in ("edge", "cloud"):
-        try:
-            from tutor.adapters.tts.real import build_real_synthesizer
-        except ImportError as exc:  # arrives later
-            raise RuntimeError(f"TTS_BACKEND={settings.tts_backend} not available yet.") from exc
-        return build_real_synthesizer(settings)
+    if settings.tts_backend == "groq":
+        from tutor.adapters.tts.groq import build_groq_synthesizer
+
+        return build_groq_synthesizer(settings)
+    if settings.tts_backend in ("edge", "openai", "cloud"):
+        raise RuntimeError(
+            f"TTS_BACKEND={settings.tts_backend} is not implemented; use 'groq' or 'stub'."
+        )
     from tutor.adapters.tts.stub import StubSynthesizer
 
     return StubSynthesizer()

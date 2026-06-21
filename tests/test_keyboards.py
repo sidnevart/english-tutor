@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from tutor.bot.keyboards import answer_options, parse_callback, quiz_invite
+from tutor.bot.keyboards import answer_options, evening_actions, parse_callback, quiz_invite
+
+
+def test_evening_actions_with_and_without_content():
+    assert evening_actions(5) == [
+        [("💬 Discuss today's material", "discuss:5")],
+        [("🎙 Speaking practice", "speak:start")],
+    ]
+    assert evening_actions(None) == [[("🎙 Speaking practice", "speak:start")]]
 
 
 def test_quiz_invite():

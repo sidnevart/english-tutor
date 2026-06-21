@@ -7,6 +7,7 @@ a reminder to review.
 
 from __future__ import annotations
 
+from tutor.bot.keyboards import evening_actions
 from tutor.domain.enums import ContentType, DeliveryStatus
 from tutor.factory import Services
 from tutor.pipeline import deliver_new
@@ -44,11 +45,15 @@ async def morning_push(svc: Services, user_id: int) -> list[int]:
 
 
 async def evening_reminder(svc: Services, user_id: int) -> None:
-    """Evening nudge to review today's Anki cards (words & idioms)."""
-    today = svc.repo.fetch_by_status(user_id, DeliveryStatus.DELIVERED, limit=50)
-    extra = f" You picked up {len(today)} item(s) today." if today else ""
+    """Evening nudge: review Anki + offer a dialog/speaking session."""
+    delivered = svc.repo.fetch_by_status(user_id, DeliveryStatus.DELIVERED, limit=50)
+    cards = svc.repo.anki_card_count(user_id)
+    top = delivered[-1].id if delivered else None  # most recent delivered item
     await svc.notifier.send(
         user_id,
-        "🌙 <b>Time for your Anki review</b> — go through today's words & idioms!" + extra,
+        "🌙 <b>Evening review</b>\n"
+        f"• {cards} Anki card(s) waiting — review them in the Anki app 📚\n"
+        f"• {len(delivered)} item(s) from today — discuss them or just practice speaking",
+        keyboard=evening_actions(top),
     )
-    svc.repo.log_job("evening_reminder", "ok", f"items={len(today)}")
+    svc.repo.log_job("evening_reminder", "ok", f"delivered={len(delivered)} cards={cards}")

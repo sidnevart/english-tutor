@@ -75,6 +75,69 @@ def _run_eval_cards() -> int:
     return 0
 
 
+def _run_eval_speak() -> int:
+    """Show a generated speaking task + a discussion opener from the real LLM."""
+    import asyncio
+
+    from tutor.adapters.llm.ollama import OllamaLLMClient
+    from tutor.config import get_settings
+
+    s = get_settings()
+    passage = (
+        "The mitochondrion is the powerhouse of the cell, generating most of its ATP. "
+        "Researchers recently found it also helps regulate ageing."
+    )
+
+    async def go() -> None:
+        llm = OllamaLLMClient(s.ollama_base_url, s.ollama_api_key, s.ollama_model)
+        task = await llm.complete(
+            "You are a TOEFL speaking coach. Give ONE short TOEFL-style speaking task "
+            "(1-2 sentences).",
+            "Begin.",
+        )
+        print("SPEAKING TASK:\n  " + task.strip())
+        opener = await llm.complete(
+            "You are a TOEFL coach. Open a discussion with ONE engaging question about "
+            f"this passage.\n\nPASSAGE:\n{passage}",
+            "Begin.",
+        )
+        print("\nDISCUSS OPENER:\n  " + opener.strip())
+
+    try:
+        asyncio.run(go())
+    except Exception as exc:  # noqa: BLE001
+        print(f"[tutor] eval-speak failed: {exc}")
+        return 1
+    return 0
+
+
+def _run_tts_smoke() -> int:
+    """Synthesize one short clip with the configured TTS backend."""
+    import asyncio
+    from pathlib import Path
+
+    from tutor.config import get_settings
+    from tutor.factory import build_synthesizer
+
+    s = get_settings()
+
+    async def go() -> None:
+        synth = build_synthesizer(s)
+        out = Path(s.data_dir) / "tts_smoke.ogg"
+        path = await synth.synthesize(
+            "Hello! This is your TOEFL speaking coach. Let's practice.", out
+        )
+        size = path.stat().st_size
+        print(f"[tutor] TTS ok: {path} ({size} bytes) backend={s.tts_backend} voice={s.tts_voice}")
+
+    try:
+        asyncio.run(go())
+    except Exception as exc:  # noqa: BLE001
+        print(f"[tutor] tts-smoke failed: {exc}")
+        return 1
+    return 0
+
+
 def _run_llm_smoke() -> int:
     import asyncio
 
@@ -179,6 +242,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("ingest", help="fetch RSS podcast feeds once")
     sub.add_parser("llm-smoke", help="check the configured LLM backend returns valid quiz JSON")
     sub.add_parser("eval-cards", help="eval the flashcard prompt against the real LLM")
+    sub.add_parser("eval-speak", help="show a generated speaking task + discussion opener")
+    sub.add_parser("tts-smoke", help="synthesize one clip with the configured TTS backend")
 
     args = parser.parse_args(argv)
 
@@ -195,6 +260,10 @@ def main(argv: list[str] | None = None) -> int:
             return _run_llm_smoke()
         case "eval-cards":
             return _run_eval_cards()
+        case "eval-speak":
+            return _run_eval_speak()
+        case "tts-smoke":
+            return _run_tts_smoke()
         case _:  # pragma: no cover
             parser.print_help()
             return 1

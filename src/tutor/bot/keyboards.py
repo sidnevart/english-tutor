@@ -14,6 +14,15 @@ def quiz_invite(content_id: int, label: str = "📖 Quiz me") -> Keyboard:
     return [[(label, f"quiz:{content_id}")]]
 
 
+def evening_actions(content_id: int | None) -> Keyboard:
+    """Evening buttons: discuss today's top item + open-ended speaking practice."""
+    rows: Keyboard = []
+    if content_id is not None:
+        rows.append([("💬 Discuss today's material", f"discuss:{content_id}")])
+    rows.append([("🎙 Speaking practice", "speak:start")])
+    return rows
+
+
 def answer_options(content_id: int, question_id: int, options: list[str]) -> Keyboard:
     """Compact letter buttons (A/B/C/D) in rows of four. The option *text* lives
     in the message body, so nothing gets truncated on the button."""

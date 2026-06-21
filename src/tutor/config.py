@@ -16,7 +16,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LLMBackend = Literal["stub", "ollama", "hermes"]
 STTBackend = Literal["stub", "whisper", "cloud"]
-TTSBackend = Literal["stub", "edge", "cloud"]
+TTSBackend = Literal["stub", "groq", "edge", "openai", "cloud"]
 AnkiBackend = Literal["genanki", "ankiconnect", "null"]
 NotifierBackend = Literal["stub", "telegram"]
 
@@ -62,6 +62,8 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     stt_model: str = ""  # blank -> whisper-large-v3 (Groq) or whisper-1 (OpenAI)
     stt_max_seconds: int = 720  # transcribe only the first N seconds (cost/size cap)
+    tts_model: str = ""  # blank -> canopylabs/orpheus-v1-english (Groq)
+    tts_voice: str = "troy"  # Groq Orpheus voice (troy | hannah | austin | ...)
 
     # ---- Hermes (optional; conversational plane only, never graded path) ----
     hermes_enabled: bool = False
@@ -102,6 +104,11 @@ class Settings(BaseSettings):
     @property
     def soul_path(self) -> Path:
         return Path(self.soul_dir)
+
+    @property
+    def voice_enabled(self) -> bool:
+        """Whether the bot should send voice replies (a real TTS backend is set)."""
+        return self.tts_backend != "stub"
 
 
 @lru_cache
