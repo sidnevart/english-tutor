@@ -18,7 +18,7 @@ from tutor.eval.grader import is_correct
 from tutor.factory import Services
 from tutor.memory import Memory
 from tutor.pipeline import build_evaluation, deliver_new, finalize_review
-from tutor.render import render_score
+from tutor.render import render_question, render_score
 
 _COACH_SYSTEM_SUFFIX = (
     "\n\nYou are now in free-form spoken/written practice mode. Reply"
@@ -36,7 +36,7 @@ async def _send_next_question(svc: Services, user_id: int, content_id: int) -> b
     if not pending:
         return False
     idx, q = pending[0]
-    text = f"<b>Question {idx + 1}/{len(quiz.questions)}</b>\n\n{q.prompt}"
+    text = render_question(idx, len(quiz.questions), q)
     await svc.notifier.send(user_id, text, keyboard=answer_options(content_id, q.id, q.options))
     return True
 
@@ -141,8 +141,17 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         svc.repo.record_attempt(qid, user, chosen, ok)
         await cb.answer("✅ Correct!" if ok else "❌ Not quite.")
 
+        letters = "ABCDEFGH"
+        correct_letter = letters[question.correct_index]
         correct_opt = question.options[question.correct_index]
-        verdict = "✅ Correct!" if ok else f"❌ Correct answer: {correct_opt}"
+        if ok:
+            verdict = f"✅ Correct — <b>{correct_letter}. {correct_opt}</b>"
+        else:
+            chosen_letter = letters[chosen] if 0 <= chosen < len(question.options) else "?"
+            verdict = (
+                f"❌ You chose <b>{chosen_letter}</b>. "
+                f"Correct: <b>{correct_letter}. {correct_opt}</b>"
+            )
         if cb.message is not None:
             try:
                 await cb.message.edit_text(
