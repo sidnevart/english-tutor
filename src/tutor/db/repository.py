@@ -13,7 +13,7 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 
-from tutor.domain.enums import DeliveryStatus, QuizKind, is_legal_transition
+from tutor.domain.enums import ContentType, DeliveryStatus, QuizKind, is_legal_transition
 from tutor.domain.models import (
     Attempt,
     Card,
@@ -94,17 +94,20 @@ class Repository:
         return self._to_content(row) if row else None
 
     def fetch_by_status(
-        self, user_id: int, status: DeliveryStatus, limit: int = 50
+        self,
+        user_id: int,
+        status: DeliveryStatus,
+        limit: int = 50,
+        content_type: ContentType | None = None,
     ) -> list[ContentItem]:
-        rows = self.conn.execute(
-            """
-            SELECT * FROM content_item
-            WHERE user_id = ? AND status = ?
-            ORDER BY fetched_at ASC
-            LIMIT ?
-            """,
-            (user_id, status.value, limit),
-        ).fetchall()
+        sql = "SELECT * FROM content_item WHERE user_id = ? AND status = ?"
+        params: list[object] = [user_id, status.value]
+        if content_type is not None:
+            sql += " AND content_type = ?"
+            params.append(content_type.value)
+        sql += " ORDER BY fetched_at ASC LIMIT ?"
+        params.append(limit)
+        rows = self.conn.execute(sql, params).fetchall()
         return [self._to_content(r) for r in rows]
 
     def set_body_text(self, content_id: int, body_text: str) -> None:

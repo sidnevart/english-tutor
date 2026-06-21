@@ -9,7 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from tutor.domain.enums import DeliveryStatus, QuizKind
+from tutor.bot.keyboards import quiz_invite
+from tutor.domain.enums import ContentType, DeliveryStatus, QuizKind
 from tutor.domain.models import AnkiResult, Quiz
 from tutor.eval.anki_cards import build_cards
 from tutor.eval.grader import is_correct
@@ -62,12 +63,19 @@ async def ensure_transcript(svc: Services, content_id: int) -> str:
     return text
 
 
-async def deliver_new(svc: Services, user_id: int, limit: int = 5) -> list[int]:
-    """Push NEW items to the learner and mark them DELIVERED."""
+def _quiz_label(item) -> str:
+    return "🎧 Listening quiz" if item.content_type == ContentType.PODCAST else "📖 Quiz me"
+
+
+async def deliver_new(
+    svc: Services, user_id: int, limit: int = 5, content_type: ContentType | None = None
+) -> list[int]:
+    """Push NEW items (optionally of one type) to the learner, mark DELIVERED."""
     delivered: list[int] = []
-    for item in svc.repo.fetch_by_status(user_id, DeliveryStatus.NEW, limit):
-        keyboard = [[("📖 Quiz me", f"quiz:{item.id}")]]
-        await svc.notifier.send(user_id, render_card(item), keyboard=keyboard)
+    for item in svc.repo.fetch_by_status(user_id, DeliveryStatus.NEW, limit, content_type):
+        await svc.notifier.send(
+            user_id, render_card(item), keyboard=quiz_invite(item.id, _quiz_label(item))
+        )
         svc.repo.mark_delivered(item.id)
         delivered.append(item.id)
     return delivered

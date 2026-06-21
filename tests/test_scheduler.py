@@ -5,7 +5,7 @@ from __future__ import annotations
 from tutor.app import open_services
 from tutor.bot.keyboards import quiz_invite
 from tutor.config import Settings
-from tutor.domain.enums import ContentType, DeliveryStatus, QuizKind, SourceType
+from tutor.domain.enums import ContentType, QuizKind, SourceType
 from tutor.domain.models import RawItem
 from tutor.pipeline import deliver_new
 from tutor.scheduler.jobs import evening_eval, morning_push
@@ -36,16 +36,34 @@ def _raw(i: int) -> RawItem:
     )
 
 
-async def test_morning_push_delivers_and_logs(tmp_path):
+def _podcast(i: int) -> RawItem:
+    return RawItem(
+        source_type=SourceType.RSS,
+        source_ref="Short Wave",
+        external_id=f"p{i}",
+        content_type=ContentType.PODCAST,
+        title=f"Episode {i}",
+        audio_url=f"https://cdn/ep{i}.mp3",
+        duration_sec=600,
+    )
+
+
+async def test_morning_push_delivers_both_types_and_logs(tmp_path):
     with open_services(_settings(tmp_path)) as svc:
         user = svc.settings.admin_user_id
-        for i in range(2):
+        for i in range(3):  # 3 articles, 3 podcasts NEW
             svc.repo.add_content(_raw(i), user)
+            svc.repo.add_content(_podcast(i), user)
 
-        ids = await morning_push(svc, user, limit=5)
-        assert len(ids) == 2
-        assert all(svc.repo.get(i).status == DeliveryStatus.DELIVERED for i in ids)
-        assert len(svc.notifier.messages) == 2  # type: ignore[attr-defined]
+        ids = await morning_push(svc, user)  # defaults: 2 articles + 2 podcasts
+        assert len(ids) == 4
+
+        types = {svc.repo.get(i).content_type for i in ids}
+        assert types == {ContentType.ARTICLE, ContentType.PODCAST}
+
+        # a podcast card is rendered with the headphones marker
+        msgs = svc.notifier.messages  # type: ignore[attr-defined]
+        assert any("🎧" in m.text for m in msgs)
 
         logs = svc.repo.conn.execute("SELECT job FROM schedule_log").fetchall()
         assert any(r["job"] == "morning_push" for r in logs)

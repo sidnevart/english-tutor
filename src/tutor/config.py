@@ -75,6 +75,8 @@ class Settings(BaseSettings):
     refresh_cron: str = "0 7 * * *"  # scrape channels + ingest podcasts (before morning push)
     morning_cron: str = "30 7 * * *"
     evening_cron: str = "0 20 * * *"
+    morning_articles: int = 2  # how many articles to deliver each morning
+    morning_podcasts: int = 2  # how many podcasts to deliver each morning
     db_path: str = "data/tutor.db"
     data_dir: str = "data"
     soul_dir: str = "soul"

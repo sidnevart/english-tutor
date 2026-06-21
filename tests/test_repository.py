@@ -21,6 +21,36 @@ def test_cross_source_dedup_by_body(repo):
     assert second is None
 
 
+def test_fetch_by_status_filters_by_content_type(repo):
+    from tutor.domain.enums import DeliveryStatus
+
+    repo.add_content(
+        RawItem(
+            source_type=SourceType.CHANNEL,
+            source_ref="c",
+            external_id="a1",
+            content_type=ContentType.ARTICLE,
+            body_text="An article body about science.",
+        ),
+        user_id=764315256,
+    )
+    repo.add_content(
+        RawItem(
+            source_type=SourceType.RSS,
+            source_ref="Short Wave",
+            external_id="p1",
+            content_type=ContentType.PODCAST,
+            audio_url="https://cdn/x.mp3",
+        ),
+        user_id=764315256,
+    )
+
+    podcasts = repo.fetch_by_status(764315256, DeliveryStatus.NEW, content_type=ContentType.PODCAST)
+    assert [c.content_type for c in podcasts] == [ContentType.PODCAST]
+    articles = repo.fetch_by_status(764315256, DeliveryStatus.NEW, content_type=ContentType.ARTICLE)
+    assert [c.content_type for c in articles] == [ContentType.ARTICLE]
+
+
 def test_quiz_roundtrip_and_attempts(repo, sample_raw):
     cid = repo.add_content(sample_raw(), user_id=764315256)
     questions = [

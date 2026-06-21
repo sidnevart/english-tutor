@@ -10,8 +10,8 @@ from tutor.interfaces.notifier import Keyboard
 _LETTERS = "ABCDEFGH"
 
 
-def quiz_invite(content_id: int) -> Keyboard:
-    return [[("📖 Quiz me", f"quiz:{content_id}")]]
+def quiz_invite(content_id: int, label: str = "📖 Quiz me") -> Keyboard:
+    return [[(label, f"quiz:{content_id}")]]
 
 
 def answer_options(content_id: int, question_id: int, options: list[str]) -> Keyboard:
