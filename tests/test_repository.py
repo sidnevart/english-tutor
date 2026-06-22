@@ -97,3 +97,85 @@ def test_vocab_roundtrip_is_idempotent(repo, sample_raw):
     assert {v.word for v in stored} == {"ubiquitous", "ephemeral"}
     # ordered by freq_rank ascending (rarer first)
     assert stored[0].word == "ephemeral"
+
+
+def test_reset_progress_clears_all_and_resets_status(repo, sample_raw):
+    """reset_progress deletes attempts, cards, quizzes, essays, errors, and
+    resets content_item status to NEW."""
+    from tutor.domain.enums import DeliveryStatus
+    from tutor.domain.models import Card
+
+    uid = 764315256
+
+    # Add content and progress.
+    cid = repo.add_content(sample_raw(), user_id=uid)
+    repo.mark_delivered(cid)
+
+    questions = [
+        QuizQuestion(prompt="Q1", options=["A", "B"], correct_index=0, explanation=""),
+    ]
+    repo.save_quiz(cid, QuizKind.READING, questions)
+    quiz = repo.get_quiz(cid, QuizKind.READING)
+    repo.record_attempt(quiz.questions[0].id, uid, chosen_index=0, is_correct=True)
+
+    repo.save_vocab(cid, [VocabItem(content_id=cid, word="test", definition="def", freq_rank=3.0)])
+    repo.save_anki_cards(cid, [Card(front="f", back="b")], deck="test", sink="genanki")
+    repo.save_session_errors(uid, "speak", [{"type": "grammar", "error": "e", "correction": "c"}])
+    repo.record_topic_progress(uid, "science", "quiz", cid, 0.8)
+    repo.save_essay(uid, "prompt", "text", 4, "ok", "independent")
+
+    # Verify data exists.
+    assert repo.count_status(uid, DeliveryStatus.DELIVERED) == 1
+    assert len(repo.attempts_for_content(cid, uid)) == 1
+    assert repo.anki_card_count(uid) == 1
+    assert repo.essay_count(uid) == 1
+
+    # Reset.
+    counts = repo.reset_progress(uid)
+    assert counts["attempts"] == 1
+    assert counts["anki_cards"] == 1
+    assert counts["quizzes"] == 1
+    assert counts["essays"] == 1
+    assert counts["session_errors"] == 1
+    assert counts["topic_progress"] == 1
+
+    # Content is back to NEW.
+    assert repo.count_status(uid, DeliveryStatus.NEW) == 1
+    assert repo.count_status(uid, DeliveryStatus.DELIVERED) == 0
+    assert repo.count_status(uid, DeliveryStatus.REVIEWED) == 0
+
+    # Quiz, attempts, cards, essays are gone.
+    assert repo.get_quiz(cid, QuizKind.READING) is None
+    assert repo.attempts_for_content(cid, uid) == []
+    assert repo.anki_card_count(uid) == 0
+    assert repo.essay_count(uid) == 0
+
+
+def test_get_quiz_auto_returns_reading_for_article(repo, sample_raw):
+    cid = repo.add_content(sample_raw(), user_id=764315256)
+    questions = [
+        QuizQuestion(prompt="Q1", options=["A", "B"], correct_index=0, explanation=""),
+    ]
+    repo.save_quiz(cid, QuizKind.READING, questions)
+    quiz = repo.get_quiz_auto(cid)
+    assert quiz is not None
+    assert quiz.kind == QuizKind.READING
+
+
+def test_get_quiz_auto_returns_listening_for_podcast(repo):
+    raw = RawItem(
+        source_type=SourceType.RSS,
+        source_ref="Short Wave",
+        external_id="p1",
+        content_type=ContentType.PODCAST,
+        audio_url="https://cdn/x.mp3",
+        body_text="A podcast transcript about science and ideas.",
+    )
+    cid = repo.add_content(raw, user_id=764315256)
+    questions = [
+        QuizQuestion(prompt="Q1", options=["A", "B"], correct_index=0, explanation=""),
+    ]
+    repo.save_quiz(cid, QuizKind.LISTENING, questions)
+    quiz = repo.get_quiz_auto(cid)
+    assert quiz is not None
+    assert quiz.kind == QuizKind.LISTENING

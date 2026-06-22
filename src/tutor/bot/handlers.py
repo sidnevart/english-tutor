@@ -25,8 +25,8 @@ from tutor.bot.conversation import (
     start_speaking,
     submit_essay,
 )
-from tutor.bot.keyboards import answer_options
-from tutor.domain.enums import DeliveryStatus, QuizKind
+from tutor.bot.keyboards import answer_options, reset_confirm
+from tutor.domain.enums import DeliveryStatus
 from tutor.domain.models import Card
 from tutor.eval.grader import is_correct
 from tutor.factory import Services
@@ -64,6 +64,8 @@ COMMANDS: list[tuple[str, str]] = [
     ("cards", "Today's Anki cards"),
     ("progress", "Your stats"),
     ("write", "TOEFL essay practice"),
+    ("reset", "Reset all progress and start fresh"),
+    ("worksheet", "Generate an evening practice worksheet"),
     ("help", "Show available commands"),
 ]
 
@@ -88,7 +90,9 @@ HELP_TEXT = (
     "/review — evening review: grammar, vocabulary &amp; listening at C1 level\n\n"
     "<b>📊 Tracking</b>\n"
     "/cards — today's Anki cards (add <code>all</code> for full deck)\n"
-    "/progress — your stats: cards, errors, recurring mistakes\n\n"
+    "/progress — your stats: cards, errors, recurring mistakes\n"
+    "/reset — wipe all progress and start fresh (articles &amp; episodes stay)\n"
+    "/worksheet — generate an evening practice worksheet (TOEFL format)\n\n"
     "<i>Tip: in the evening reminder, tap “💬 Discuss today's material” to talk "
     "about the day's article or episode. A plain voice message any time gets a "
     "quick coach reply.</i>"
@@ -96,7 +100,7 @@ HELP_TEXT = (
 
 
 async def _send_next_question(svc: Services, user_id: int, content_id: int) -> bool:
-    quiz = svc.repo.get_quiz(content_id, QuizKind.READING)
+    quiz = svc.repo.get_quiz_auto(content_id)
     if quiz is None:
         return False
     answered = {a.quiz_question_id for a in svc.repo.attempts_for_content(content_id, user_id)}
@@ -286,6 +290,32 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         parts.append("\n\nReview your cards in the Anki app 📚")
         await message.answer("\n".join(parts))
 
+    @router.message(Command("reset"))
+    async def on_reset(message: Message) -> None:
+        """Ask for confirmation before wiping all progress."""
+        await message.answer(
+            "⚠️ <b>Reset all progress?</b>\n\n"
+            "This will delete:\n"
+            "  • All quiz attempts &amp; scores\n"
+            "  • All Anki cards\n"
+            "  • All vocabulary items\n"
+            "  • All session errors\n"
+            "  • All essays\n"
+            "  • All topic progress\n\n"
+            "Articles &amp; episodes will be kept and re-delivered.\n"
+            "This cannot be undone.",
+            keyboard=reset_confirm(),
+        )
+
+    @router.message(Command("worksheet"))
+    async def on_worksheet(message: Message) -> None:
+        """Generate an evening practice worksheet on demand."""
+        from tutor.scheduler.jobs import evening_worksheet
+
+        user = message.from_user.id
+        await message.answer("📝 Generating your worksheet...")
+        await evening_worksheet(svc, user)
+
     # ---- callbacks ----
     @router.callback_query(F.data.startswith("discuss:"))
     async def on_discuss(cb: CallbackQuery, state: FSMContext) -> None:
@@ -302,7 +332,7 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         await cb.answer()
         user = cb.from_user.id
         content_id = int(cb.data.split(":")[1])
-        if svc.repo.get_quiz(content_id, QuizKind.READING) is None:
+        if svc.repo.get_quiz_auto(content_id) is None:
             await build_evaluation(svc, content_id, user)
         if not await _send_next_question(svc, user, content_id):
             await _finalize(svc, user, content_id)
@@ -313,7 +343,7 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         _, scid, sqid, schosen = cb.data.split(":")
         content_id, qid, chosen = int(scid), int(sqid), int(schosen)
 
-        quiz = svc.repo.get_quiz(content_id, QuizKind.READING)
+        quiz = svc.repo.get_quiz_auto(content_id)
         question = next((q for q in quiz.questions if q.id == qid), None) if quiz else None
         if question is None:
             await cb.answer("This quiz has expired.")
@@ -348,6 +378,71 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
 
         if not await _send_next_question(svc, user, content_id):
             await _finalize(svc, user, content_id)
+
+    @router.callback_query(F.data.startswith("reset:"))
+    async def on_reset_cb(cb: CallbackQuery) -> None:
+        await cb.answer()
+        action = cb.data.split(":")[1]
+        if action == "confirm":
+            counts = svc.repo.reset_progress(cb.from_user.id)
+            total = sum(counts.values())
+            await svc.notifier.send(
+                cb.from_user.id,
+                f"✅ <b>Progress reset</b>\n\n"
+                f"Deleted: {total} items across {len(counts)} tables.\n"
+                f"Content is queued for re-delivery.\n\n"
+                f"Use /start to begin fresh!",
+            )
+        else:
+            await svc.notifier.send(cb.from_user.id, "Reset cancelled. Your progress is safe. 👍")
+
+    # ---- document submission (worksheet answers) ----
+    @router.message(F.document)
+    async def on_document(message: Message) -> None:
+        """Handle worksheet file submission: parse answers and grade."""
+        from tutor.worksheet.generator import worksheet_from_json
+        from tutor.worksheet.grader import grade_worksheet
+        from tutor.worksheet.parser import parse_worksheet_answers
+
+        user = message.from_user.id
+        doc = message.document
+        if doc is None:
+            return
+
+        fname = doc.file_name or ""
+        if not fname.endswith((".md", ".txt")):
+            await message.answer("Please send a .md or .txt file with your worksheet answers.")
+            return
+
+        # Download the file.
+        if bot is None:
+            await message.answer("Cannot process files right now.")
+            return
+        tg_file = await bot.get_file(doc.file_id)
+        file_bytes = await bot.download_file(tg_file.file_path)
+        text = file_bytes.decode("utf-8", errors="replace")
+
+        # Find the latest pending worksheet.
+        worksheet = svc.repo.get_latest_worksheet(user, status="pending")
+        if worksheet is None:
+            # Also check submitted (re-grade scenario).
+            worksheet = svc.repo.get_latest_worksheet(user, status="submitted")
+        if worksheet is None:
+            await message.answer(
+                "No pending worksheet found. Wait for the evening worksheet "
+                "or use /worksheet to generate one."
+            )
+            return
+
+        # Parse and grade.
+        answers = parse_worksheet_answers(text)
+        svc.repo.update_worksheet_answers(worksheet["id"], text)
+
+        payload = worksheet_from_json(worksheet["items_json"])
+        score, feedback = await grade_worksheet(svc.llm, payload, answers)
+        svc.repo.update_worksheet_grade(worksheet["id"], score, feedback)
+
+        await message.answer(feedback)
 
     # ---- in-session messages (registered last so commands win) ----
     @router.message(ConversationState.essay, F.text)

@@ -19,7 +19,9 @@ def _render_article(item: ContentItem) -> str:
     title = item.title or "Today's reading"
     body = item.body_text.strip()
     preview = body[:_PREVIEW_CHARS] + ("…" if len(body) > _PREVIEW_CHARS else "")
-    lines = [f"📰 <b>{title}</b>"]
+    word_count = len(body.split())
+    read_min = max(1, round(word_count / 200))  # ~200 wpm average
+    lines = [f"📰 <b>{title}</b> · ~{read_min} min read"]
     if item.url:
         lines.append(item.url)
     if preview:

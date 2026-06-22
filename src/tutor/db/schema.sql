@@ -131,6 +131,19 @@ CREATE TABLE IF NOT EXISTS topic_progress (
 );
 
 CREATE INDEX IF NOT EXISTS ix_topic_user ON topic_progress (user_id, topic);
+
+CREATE TABLE IF NOT EXISTS worksheet (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL,
+    created_at  TEXT NOT NULL,
+    items_json  TEXT NOT NULL,                       -- JSON: all exercise items
+    answers     TEXT NOT NULL DEFAULT '',             -- user answers (when submitted)
+    score       REAL,                                -- total score 0.0-1.0
+    feedback    TEXT NOT NULL DEFAULT '',             -- LLM feedback
+    status      TEXT NOT NULL DEFAULT 'pending'       -- pending | submitted | graded
+);
+
+CREATE INDEX IF NOT EXISTS ix_worksheet_user ON worksheet (user_id, created_at);
 CREATE TRIGGER IF NOT EXISTS trg_content_status_guard
 BEFORE UPDATE OF status ON content_item
 FOR EACH ROW

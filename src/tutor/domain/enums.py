@@ -37,6 +37,7 @@ class Cadence(StrEnum):
 
 class QuizKind(StrEnum):
     READING = "reading"
+    LISTENING = "listening"
     VOCAB = "vocab"
 
 

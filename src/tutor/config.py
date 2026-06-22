@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     tg_session_path: str = "bot_data/telegram_e2e_session"
     scrape_channels: str = "1137165265,1356345589"
     min_article_len: int = 350  # drop blurbs/ads shorter than this when scraping
+    max_article_len: int = 4500  # ~700 words, TOEFL passage scale; skip longer articles
 
     # ---- Ollama / LLM ----
     ollama_base_url: str = "http://localhost:11434/v1"
@@ -75,14 +76,14 @@ class Settings(BaseSettings):
     # ---- Schedule / paths ----
     tz: str = "Europe/Moscow"
     refresh_cron: str = "0 7 * * *"  # scrape channels + ingest podcasts (before morning push)
-    morning_cron: str = "30 7 * * *"
+    morning_cron: str = "0 8 * * *"
     evening_cron: str = "0 20 * * *"
     daytime_checkin_cron: str = "0 13 * * *"  # mid-day check-in (praise + nudge)
     morning_articles: int = 2  # how many articles to deliver each morning
     morning_podcasts: int = 2  # how many podcasts to deliver each morning
     essay_cron: str = "0 18 * * 3,6"  # weekly essay reminder (Wed + Sat at 18:00)
     weekly_summary_cron: str = "0 19 * * 0"  # weekly summary (Sunday at 19:00)
-    flashcards_per_item: int = 8  # words+idioms Anki cards generated per delivered item
+    flashcards_per_item: int = 30  # words+idioms+phrases Anki cards generated per delivered item
     db_path: str = "data/tutor.db"
     data_dir: str = "data"
     soul_dir: str = "soul"

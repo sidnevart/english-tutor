@@ -71,6 +71,7 @@ class QuizQuestion(BaseModel):
     options: list[str] = Field(min_length=2)
     correct_index: int
     explanation: str = ""
+    question_type: str = ""  # see eval/quiz_builder._QUESTION_TYPES
 
 
 class Quiz(BaseModel):

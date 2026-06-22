@@ -15,7 +15,7 @@ from tutor.domain.models import AnkiResult, Quiz
 from tutor.eval.anki_cards import build_cards
 from tutor.eval.flashcards import make_flashcards
 from tutor.eval.grader import is_correct
-from tutor.eval.quiz_builder import build_reading_quiz
+from tutor.eval.quiz_builder import build_listening_quiz, build_reading_quiz
 from tutor.eval.transcript import clean_transcript
 from tutor.eval.vocab import select_vocab
 from tutor.factory import Services
@@ -245,8 +245,13 @@ async def deliver_new(
 ) -> list[int]:
     """Push NEW items (optionally of one type) to the learner, mark DELIVERED,
     and immediately send the words+idioms Anki deck for each."""
+    max_len = svc.settings.max_article_len
     delivered: list[int] = []
     for item in svc.repo.fetch_by_status(user_id, DeliveryStatus.NEW, limit, content_type):
+        # Truncate overly long articles to TOEFL scale.
+        if item.content_type == ContentType.ARTICLE and len(item.body_text) > max_len:
+            svc.repo.set_body_text(item.id, item.body_text[:max_len] + "…")
+            item = svc.repo.get(item.id) or item
         await svc.notifier.send(
             user_id, render_card(item), keyboard=quiz_invite(item.id, _quiz_label(item))
         )
@@ -274,12 +279,18 @@ async def build_evaluation(
     svc.repo.save_vocab(content_id, select_vocab(content_id, content.body_text, limit=vocab_limit))
 
     mem = Memory(svc.settings.soul_dir, user_id)
-    questions = await build_reading_quiz(
-        svc.llm, content, n=n_questions, system=mem.persona(), recall_hint=mem.recall_hint()
-    )
-    svc.repo.save_quiz(content_id, QuizKind.READING, questions)
+    if content.content_type == ContentType.PODCAST:
+        questions = await build_listening_quiz(
+            svc.llm, content, n=n_questions, system=mem.persona(), recall_hint=mem.recall_hint()
+        )
+        svc.repo.save_quiz(content_id, QuizKind.LISTENING, questions)
+    else:
+        questions = await build_reading_quiz(
+            svc.llm, content, n=n_questions, system=mem.persona(), recall_hint=mem.recall_hint()
+        )
+        svc.repo.save_quiz(content_id, QuizKind.READING, questions)
 
-    quiz = svc.repo.get_quiz(content_id, QuizKind.READING)
+    quiz = svc.repo.get_quiz_auto(content_id)
     assert quiz is not None
     return quiz
 
@@ -291,7 +302,7 @@ async def finalize_review(svc: Services, content_id: int, user_id: int) -> Revie
     so it works whether answers were recorded one-by-one (interactive bot) or in
     a batch. Idempotent: if already REVIEWED it does not re-transition.
     """
-    quiz = svc.repo.get_quiz(content_id, QuizKind.READING)
+    quiz = svc.repo.get_quiz_auto(content_id)
     if quiz is None:
         raise KeyError(f"no quiz for content_item {content_id}")
 
@@ -326,7 +337,7 @@ async def submit_answers(
 ) -> ReviewResult:
     """Record a batch of answers, then finalize. (The bot records incrementally
     and calls finalize_review directly.)"""
-    quiz = svc.repo.get_quiz(content_id, QuizKind.READING)
+    quiz = svc.repo.get_quiz_auto(content_id)
     if quiz is None:
         raise KeyError(f"no quiz for content_item {content_id}")
 

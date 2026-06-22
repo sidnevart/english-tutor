@@ -90,6 +90,7 @@ async def test_build_scheduler_registers_jobs(tmp_path):
             "morning_push",
             "daytime_checkin",
             "evening_reminder",
+            "evening_worksheet",
             "essay_reminder",
             "weekly_summary",
         }

@@ -23,6 +23,14 @@ def evening_actions(content_id: int | None) -> Keyboard:
     return rows
 
 
+def reset_confirm() -> Keyboard:
+    """Confirmation keyboard for the /reset command."""
+    return [
+        [("✅ Yes, reset everything", "reset:confirm")],
+        [("❌ Cancel", "reset:cancel")],
+    ]
+
+
 def answer_options(content_id: int, question_id: int, options: list[str]) -> Keyboard:
     """Compact letter buttons (A/B/C/D) in rows of four. The option *text* lives
     in the message body, so nothing gets truncated on the button."""

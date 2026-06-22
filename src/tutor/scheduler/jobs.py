@@ -86,9 +86,7 @@ async def daytime_checkin(svc: Services, user_id: int) -> None:
                     kind = "🎧 podcast" if it.content_type == ContentType.PODCAST else "📰 article"
                     title = it.title or "Untitled"
                     # Get quiz score.
-                    from tutor.domain.enums import QuizKind
-
-                    quiz = svc.repo.get_quiz(it.id, QuizKind.READING)
+                    quiz = svc.repo.get_quiz_auto(it.id)
                     score_str = ""
                     if quiz:
                         attempts = svc.repo.attempts_for_content(it.id, user_id)
@@ -196,6 +194,74 @@ async def evening_reminder(svc: Services, user_id: int) -> None:
         svc.repo.log_job("evening_reminder", "ok", f"delivered={len(delivered)} cards={cards}")
     except Exception as exc:  # noqa: BLE001
         svc.repo.log_job("evening_reminder", "error", str(exc)[:200])
+
+
+async def evening_worksheet(svc: Services, user_id: int) -> None:
+    """Generate and send an evening worksheet with TOEFL-format exercises.
+
+    Collects today's vocabulary, speaking errors, and article content,
+    then generates a printable exercise sheet (MD + PDF).
+    """
+    from pathlib import Path
+
+    from tutor.worksheet.generator import generate_worksheet, worksheet_to_json
+    from tutor.worksheet.renderer import render_worksheet_md, render_worksheet_pdf
+
+    try:
+        # Collect today's data.
+        vocab = svc.repo.get_vocab_today(user_id, limit=15)
+        errors = svc.repo.recent_session_errors(user_id, limit=5)
+        articles = svc.repo.get_today_articles(user_id, limit=2)
+
+        if not vocab and not articles:
+            await svc.notifier.send(
+                user_id,
+                "📝 No materials today to generate a worksheet. "
+                "Read an article or listen to a podcast first!",
+            )
+            return
+
+        # Generate exercises.
+        payload = await generate_worksheet(svc.llm, vocab, errors, articles)
+
+        # Save to DB.
+        items_json = worksheet_to_json(payload)
+        worksheet_id = svc.repo.save_worksheet(user_id, items_json)
+
+        # Render files.
+        from datetime import UTC, datetime
+
+        date_str = datetime.now(UTC).strftime("%Y-%m-%d")
+        md_content = render_worksheet_md(payload, date=date_str)
+
+        md_path = Path(svc.settings.data_dir) / f"worksheet_{date_str}.md"
+        md_path.parent.mkdir(parents=True, exist_ok=True)
+        md_path.write_text(md_content, encoding="utf-8")
+
+        pdf_path = render_worksheet_pdf(md_content, md_path.with_suffix(".pdf"))
+
+        # Send to user.
+        await svc.notifier.send(
+            user_id,
+            f"📝 <b>Evening Worksheet — {date_str}</b>\n\n"
+            f"Today's practice includes:\n"
+            f"  • {len(payload.fill_blanks)} fill-in-the-blank questions\n"
+            f"  • {len(payload.error_correction)} error corrections\n"
+            f"  • {len(payload.sentence_transform)} sentence transformations\n"
+            f"  • {sum(len(s.questions) for s in payload.mini_reading)} reading questions\n"
+            f"  • {len(payload.collocation_match)} collocation matches\n\n"
+            f"Fill in your answers and send the file back when done!",
+        )
+        await svc.notifier.send_file(user_id, md_path, caption="Markdown version")
+        await svc.notifier.send_file(user_id, pdf_path, caption="PDF version")
+
+        svc.repo.log_job(
+            "evening_worksheet",
+            "ok",
+            f"worksheet_id={worksheet_id} vocab={len(vocab)} errors={len(errors)}",
+        )
+    except Exception as exc:  # noqa: BLE001
+        svc.repo.log_job("evening_worksheet", "error", str(exc)[:200])
 
 
 async def essay_reminder(svc: Services, user_id: int) -> None:

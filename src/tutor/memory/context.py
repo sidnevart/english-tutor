@@ -19,7 +19,7 @@ The profile includes:
 from __future__ import annotations
 
 from tutor.db.repository import Repository
-from tutor.domain.enums import DeliveryStatus, QuizKind
+from tutor.domain.enums import DeliveryStatus
 from tutor.memory.recall import Memory
 
 
@@ -65,7 +65,7 @@ def build_learner_context(repo: Repository, user_id: int, soul_dir: str) -> str:
         for it in reviewed:
             kind = "🎧" if it.content_type.value == "podcast" else "📰"
             title = it.title or "Untitled"
-            quiz = repo.get_quiz(it.id, QuizKind.READING)
+            quiz = repo.get_quiz_auto(it.id)
             score_str = ""
             if quiz:
                 attempts = repo.attempts_for_content(it.id, user_id)

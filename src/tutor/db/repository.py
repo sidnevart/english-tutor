@@ -180,6 +180,7 @@ class Repository:
         return quiz_id
 
     def get_quiz(self, content_id: int, kind: QuizKind) -> Quiz | None:
+        """Return the latest quiz of the given kind for this content, or None."""
         qrow = self.conn.execute(
             "SELECT * FROM quiz WHERE content_id = ? AND kind = ? ORDER BY id DESC LIMIT 1",
             (content_id, kind.value),
@@ -201,6 +202,21 @@ class Repository:
             for r in qrows
         ]
         return Quiz(id=qrow["id"], content_id=content_id, kind=kind, questions=questions)
+
+    def get_quiz_auto(self, content_id: int) -> Quiz | None:
+        """Return the latest quiz for this content, auto-detecting kind from
+        the content type (READING for articles, LISTENING for podcasts)."""
+        row = self.conn.execute(
+            "SELECT content_type FROM content_item WHERE id = ?", (content_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        kind = (
+            QuizKind.LISTENING
+            if row["content_type"] == ContentType.PODCAST.value
+            else QuizKind.READING
+        )
+        return self.get_quiz(content_id, kind)
 
     def record_attempt(
         self, quiz_question_id: int, user_id: int, chosen_index: int, is_correct: bool
@@ -510,6 +526,181 @@ class Repository:
             (user_id, limit),
         ).fetchall()
         return [(r["front"], r["back"]) for r in rows]
+
+    # ---- reset -------------------------------------------------------------
+    def reset_progress(self, user_id: int) -> dict[str, int]:
+        """Wipe all learning progress for the user. Content items are kept
+        (they're still valid articles/podcasts) but reset to NEW status so
+        they can be re-delivered. Returns counts of deleted rows per table."""
+        counts: dict[str, int] = {}
+
+        # Attempts (join through quiz_question -> quiz -> content_item).
+        cur = self.conn.execute(
+            "DELETE FROM attempt WHERE user_id = ? AND quiz_question_id IN "
+            "(SELECT qq.id FROM quiz_question qq "
+            "JOIN quiz q ON q.id = qq.quiz_id "
+            "JOIN content_item ci ON ci.id = q.content_id "
+            "WHERE ci.user_id = ?)",
+            (user_id, user_id),
+        )
+        counts["attempts"] = cur.rowcount
+
+        # Anki cards (join through content_item).
+        cur = self.conn.execute(
+            "DELETE FROM anki_card WHERE content_id IN "
+            "(SELECT id FROM content_item WHERE user_id = ?)",
+            (user_id,),
+        )
+        counts["anki_cards"] = cur.rowcount
+
+        # Quizzes (cascade deletes quiz_question rows too).
+        cur = self.conn.execute(
+            "DELETE FROM quiz WHERE content_id IN (SELECT id FROM content_item WHERE user_id = ?)",
+            (user_id,),
+        )
+        counts["quizzes"] = cur.rowcount
+
+        # Vocab items.
+        cur = self.conn.execute(
+            "DELETE FROM vocab_item WHERE content_id IN "
+            "(SELECT id FROM content_item WHERE user_id = ?)",
+            (user_id,),
+        )
+        counts["vocab_items"] = cur.rowcount
+
+        # Session errors.
+        cur = self.conn.execute("DELETE FROM session_error WHERE user_id = ?", (user_id,))
+        counts["session_errors"] = cur.rowcount
+
+        # Topic progress.
+        cur = self.conn.execute("DELETE FROM topic_progress WHERE user_id = ?", (user_id,))
+        counts["topic_progress"] = cur.rowcount
+
+        # Essays.
+        cur = self.conn.execute("DELETE FROM essay WHERE user_id = ?", (user_id,))
+        counts["essays"] = cur.rowcount
+
+        # Worksheets.
+        cur = self.conn.execute("DELETE FROM worksheet WHERE user_id = ?", (user_id,))
+        counts["worksheets"] = cur.rowcount
+
+        # Reset content_item status to NEW, clear delivery timestamps.
+        # Temporarily drop the state-machine trigger — the reset intentionally
+        # forces REVIEWED/DELIVERED → NEW, which the normal guard rejects.
+        self.conn.execute("DROP TRIGGER IF EXISTS trg_content_status_guard")
+        self.conn.execute(
+            "UPDATE content_item SET status = 'NEW', delivered_at = NULL, "
+            "reviewed_at = NULL WHERE user_id = ?",
+            (user_id,),
+        )
+        # Recreate the trigger (idempotent via IF NOT EXISTS).
+        self.conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_content_status_guard
+            BEFORE UPDATE OF status ON content_item
+            FOR EACH ROW
+            WHEN NEW.status <> OLD.status AND NOT (
+                   (OLD.status = 'NEW'       AND NEW.status IN ('DELIVERED', 'SKIPPED', 'FAILED'))
+                OR (OLD.status = 'DELIVERED' AND NEW.status IN ('REVIEWED', 'SKIPPED', 'FAILED'))
+                OR (OLD.status = 'SKIPPED'   AND NEW.status = 'NEW')
+                OR (OLD.status = 'FAILED'    AND NEW.status = 'NEW')
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'illegal content_item status transition');
+            END;
+            """
+        )
+
+        # Clear subscriber prefs (stale progress references).
+        self.conn.execute(
+            "UPDATE subscriber SET prefs_json = '{}' WHERE user_id = ?",
+            (user_id,),
+        )
+
+        self.conn.commit()
+        return counts
+
+    # ---- worksheets --------------------------------------------------------
+    def save_worksheet(self, user_id: int, items_json: str) -> int:
+        """Create a new worksheet and return its id."""
+        cur = self.conn.execute(
+            "INSERT INTO worksheet (user_id, created_at, items_json) VALUES (?, ?, ?)",
+            (user_id, _now(), items_json),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def get_worksheet(self, worksheet_id: int) -> dict | None:
+        """Return a worksheet row as a dict, or None."""
+        row = self.conn.execute("SELECT * FROM worksheet WHERE id = ?", (worksheet_id,)).fetchone()
+        return dict(row) if row else None
+
+    def get_latest_worksheet(self, user_id: int, status: str = "pending") -> dict | None:
+        """Return the most recent worksheet with the given status."""
+        row = self.conn.execute(
+            "SELECT * FROM worksheet WHERE user_id = ? AND status = ? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (user_id, status),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def update_worksheet_answers(self, worksheet_id: int, answers: str) -> None:
+        """Store the user's submitted answers."""
+        self.conn.execute(
+            "UPDATE worksheet SET answers = ?, status = 'submitted' WHERE id = ?",
+            (answers, worksheet_id),
+        )
+        self.conn.commit()
+
+    def update_worksheet_grade(self, worksheet_id: int, score: float, feedback: str) -> None:
+        """Store grading results."""
+        self.conn.execute(
+            "UPDATE worksheet SET score = ?, feedback = ?, status = 'graded' WHERE id = ?",
+            (score, feedback, worksheet_id),
+        )
+        self.conn.commit()
+
+    def get_vocab_today(self, user_id: int, limit: int = 15) -> list[VocabItem]:
+        """Return vocabulary items from content delivered today."""
+        today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        rows = self.conn.execute(
+            "SELECT v.* FROM vocab_item v "
+            "JOIN content_item ci ON ci.id = v.content_id "
+            "WHERE ci.user_id = ? AND ci.delivered_at >= ? "
+            "ORDER BY v.freq_rank ASC LIMIT ?",
+            (user_id, today, limit),
+        ).fetchall()
+        return [
+            VocabItem(
+                id=r["id"],
+                content_id=r["content_id"],
+                word=r["word"],
+                lemma=r["lemma"],
+                definition=r["definition"],
+                example=r["example"],
+                freq_rank=r["freq_rank"],
+            )
+            for r in rows
+        ]
+
+    def get_today_articles(self, user_id: int, limit: int = 2) -> list[ContentItem]:
+        """Return articles delivered today."""
+        today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        rows = self.conn.execute(
+            "SELECT * FROM content_item "
+            "WHERE user_id = ? AND content_type = 'article' AND delivered_at >= ? "
+            "ORDER BY delivered_at DESC LIMIT ?",
+            (user_id, today, limit),
+        ).fetchall()
+        return [self._to_content(r) for r in rows]
+
+    def worksheet_count(self, user_id: int) -> int:
+        """Return total worksheets completed (graded)."""
+        row = self.conn.execute(
+            "SELECT count(*) AS c FROM worksheet WHERE user_id = ? AND status = 'graded'",
+            (user_id,),
+        ).fetchone()
+        return int(row["c"])
 
     # ---- helpers -----------------------------------------------------------
     @staticmethod

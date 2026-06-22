@@ -3,7 +3,7 @@
 Cadence rules from the brief:
   - Daily Core: Short Wave, The Indicator, TED Tech
   - 3x/week (Mon/Wed/Fri): Hidden Brain, Planet Money, Freakonomics
-  - Weekend: Latent Space, Software Engineering Daily, Acquired
+  - Weekend: Latent Space, Software Engineering Daily, Acquired, Beyond Coding
 
 Feed URLs are best-known defaults; they are validated empirically by running
 `tutor ingest` and can be corrected here.
@@ -44,6 +44,11 @@ CATALOG: list[Podcast] = [
         Cadence.WEEKEND,
     ),
     Podcast("Acquired", "https://feeds.transistor.fm/acquired", Cadence.WEEKEND),
+    Podcast(
+        "Beyond Coding",
+        "https://anchor.fm/s/5bb57eac/podcast/rss",
+        Cadence.WEEKEND,
+    ),
 ]
 
 

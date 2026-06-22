@@ -40,11 +40,17 @@ def _latin_ratio(text: str) -> float:
     return latin / len(letters)
 
 
-def is_suitable(raw: RawItem, *, min_len: int = 350, min_latin: float = 0.5) -> bool:
-    """Keep only sufficiently long, predominantly-English posts (drops short
-    book blurbs and Russian course ads)."""
+def is_suitable(
+    raw: RawItem,
+    *,
+    min_len: int = 350,
+    max_len: int = 4500,
+    min_latin: float = 0.5,
+) -> bool:
+    """Keep only mid-length, predominantly-English posts. Drops short
+    blurbs/ads and overly long articles (not TOEFL-scale passages)."""
     body = raw.body_text.strip()
-    return len(body) >= min_len and _latin_ratio(body) >= min_latin
+    return min_len <= len(body) <= max_len and _latin_ratio(body) >= min_latin
 
 
 def normalize(msg: Any, channel_id: int) -> RawItem | None:
@@ -72,12 +78,16 @@ def normalize(msg: Any, channel_id: int) -> RawItem | None:
 
 
 async def scrape_channel(
-    client: Any, channel_id: int, limit: int = 20, min_len: int = 350
+    client: Any,
+    channel_id: int,
+    limit: int = 20,
+    min_len: int = 350,
+    max_len: int = 4500,
 ) -> list[RawItem]:
     items: list[RawItem] = []
     async for msg in client.iter_messages(_marked_id(channel_id), limit=limit):
         raw = normalize(msg, channel_id)
-        if raw and is_suitable(raw, min_len=min_len):
+        if raw and is_suitable(raw, min_len=min_len, max_len=max_len):
             items.append(raw)
     return items
 
@@ -112,7 +122,9 @@ async def run_scrape(settings: Settings, repo: Repository, limit: int = 20) -> d
             pass
         for channel in settings.channel_ids:
             stored = 0
-            for raw in await scrape_channel(client, channel, limit, settings.min_article_len):
+            for raw in await scrape_channel(
+                client, channel, limit, settings.min_article_len, settings.max_article_len
+            ):
                 if repo.add_content(raw, settings.admin_user_id) is not None:
                     stored += 1
             counts[channel] = stored

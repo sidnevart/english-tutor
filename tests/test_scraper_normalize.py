@@ -32,6 +32,17 @@ def test_is_suitable_drops_cyrillic_ad():
     assert is_suitable(_raw("Летние цены на английский: скидки до 40% и подарки. " * 12)) is False
 
 
+def test_is_suitable_drops_overly_long_article():
+    # Exceeds default max_len=4500.
+    long_body = "This is a perfectly normal English sentence for testing. " * 100
+    assert is_suitable(_raw(long_body)) is False
+
+
+def test_is_suitable_keeps_article_within_custom_max():
+    body = "This is a perfectly normal English sentence for testing. " * 10
+    assert is_suitable(_raw(body), max_len=10000) is True
+
+
 @dataclass
 class FakeMsg:
     id: int

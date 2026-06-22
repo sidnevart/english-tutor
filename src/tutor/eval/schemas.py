@@ -10,6 +10,7 @@ class QuestionPayload(BaseModel):
     options: list[str] = Field(min_length=2)
     correct_index: int
     explanation: str = ""
+    question_type: str = ""  # see eval/quiz_builder._QUESTION_TYPES
 
 
 class ReadingQuizPayload(BaseModel):
@@ -22,9 +23,10 @@ class CleanedTranscript(BaseModel):
 
 class Flashcard(BaseModel):
     term: str  # the word or idiom, exactly as it appears in the text
-    kind: str = "word"  # "word" | "idiom"
+    kind: str = "word"  # "word" | "phrasal_verb" | "collocation" | "idiom" | "phrase"
     definition: str  # concise English definition
     example: str = ""  # a natural example sentence
+    translation_ru: str = ""  # Russian translation of the term
 
 
 class FlashcardPayload(BaseModel):
