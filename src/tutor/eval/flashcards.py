@@ -68,9 +68,9 @@ async def make_flashcards(llm: LLMClient, text: str, *, limit: int = 30) -> list
     if len(text) < 100:
         return []
     user = (
-        f"Extract ALL useful language items from this passage — be exhaustive. "
-        f"Include vocabulary, phrasal verbs, collocations, idioms, and academic "
-        f"phrases. Aiming for at least {limit} items.\n\n"
+        "Extract ALL useful language items from this passage — be exhaustive, no cap. "
+        "Include vocabulary, phrasal verbs, collocations, idioms, and academic phrases. "
+        "Do not stop early.\n\n"
         f"PASSAGE:\n{text}"
     )
     try:

@@ -7,7 +7,7 @@ from tutor.config import Settings
 from tutor.domain.enums import Cadence, ContentType, SourceType
 from tutor.domain.models import RawItem
 from tutor.ingest.calendar import CATALOG, Podcast, due_today
-from tutor.ingest.rss import _duration_sec, normalize_entry
+from tutor.ingest.rss import _duration_sec, _split_segments, normalize_entry
 from tutor.pipeline import build_evaluation
 
 _POD = Podcast("Short Wave", "https://feeds.npr.org/510351/podcast.xml", Cadence.DAILY)
@@ -53,6 +53,68 @@ def test_normalize_entry_podcast():
 
 def test_normalize_entry_skips_without_audio():
     assert normalize_entry({"title": "No audio"}, _POD) is None
+
+
+def _raw_pod(duration_sec: int | None = None) -> RawItem:
+    return RawItem(
+        source_type=SourceType.RSS,
+        source_ref="Acquired",
+        external_id="ep-abc",
+        content_type=ContentType.PODCAST,
+        title="Big Episode",
+        audio_url="https://cdn/ep.mp3",
+        body_text="",
+        duration_sec=duration_sec,
+    )
+
+
+def test_split_segments_short_episode():
+    """Episodes shorter than max_sec are returned unchanged."""
+    raw = _raw_pod(duration_sec=1200)  # 20 min
+    segs = _split_segments(raw, max_sec=1500)
+    assert segs == [raw]
+
+
+def test_split_segments_unknown_duration():
+    """Episodes without duration are returned unchanged."""
+    raw = _raw_pod(duration_sec=None)
+    segs = _split_segments(raw, max_sec=1500)
+    assert segs == [raw]
+
+
+def test_split_segments_long_episode():
+    """A 4-hour episode splits into correct number of 25-min segments."""
+    raw = _raw_pod(duration_sec=14400)  # 4 hours = 240 min → 10 segments of 24 min
+    segs = _split_segments(raw, max_sec=1500)  # 25 min
+    assert len(segs) == 10  # ceil(14400/1500) = 10
+
+    # Each segment has a unique external_id with the ::seg: marker.
+    for i, seg in enumerate(segs):
+        assert "::seg:" in seg.external_id
+        assert f"[Part {i + 1}/10]" in seg.title
+
+    # Segments cover the full duration without overlap or gaps.
+    starts = []
+    ends = []
+    for seg in segs:
+        import re
+
+        m = re.search(r"::seg:\d+:(\d+):(\d+)$", seg.external_id)
+        assert m, f"segment marker missing in {seg.external_id}"
+        starts.append(int(m.group(1)))
+        ends.append(int(m.group(2)))
+
+    assert starts[0] == 0
+    assert ends[-1] == 14400
+    for j in range(1, len(segs)):
+        assert starts[j] == ends[j - 1]  # contiguous
+
+
+def test_split_segments_total_duration():
+    """Sum of segment durations equals the original episode duration."""
+    raw = _raw_pod(duration_sec=5400)  # 90 min → 4 segments of ~22.5 min
+    segs = _split_segments(raw, max_sec=1500)
+    assert sum(s.duration_sec for s in segs) == 5400
 
 
 async def test_build_evaluation_transcribes_podcast_lazily(tmp_path):

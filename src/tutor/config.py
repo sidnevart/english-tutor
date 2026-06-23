@@ -64,7 +64,8 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     openai_api_key: str = ""
     stt_model: str = ""  # blank -> whisper-large-v3 (Groq) or whisper-1 (OpenAI)
-    stt_max_seconds: int = 720  # transcribe only the first N seconds (cost/size cap)
+    stt_max_seconds: int = 1800  # transcribe only the first N seconds (cost/size cap)
+    max_podcast_segment_min: int = 25  # split episodes longer than this into daily segments
     tts_model: str = ""  # blank -> canopylabs/orpheus-v1-english (Groq)
     tts_voice: str = "troy"  # Groq Orpheus voice (troy | hannah | austin | ...)
 
@@ -85,7 +86,7 @@ class Settings(BaseSettings):
     morning_podcasts: int = 2  # how many podcasts to deliver each morning
     essay_cron: str = "0 18 * * 3,6"  # weekly essay reminder (Wed + Sat at 18:00)
     weekly_summary_cron: str = "0 19 * * 0"  # weekly summary (Sunday at 19:00)
-    flashcards_per_item: int = 30  # words+idioms+phrases Anki cards generated per delivered item
+    flashcards_per_item: int = 100  # words+idioms+phrases Anki cards generated per delivered item
     db_path: str = "data/tutor.db"
     data_dir: str = "data"
     soul_dir: str = "soul"

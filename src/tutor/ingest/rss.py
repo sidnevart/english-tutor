@@ -79,6 +79,35 @@ def normalize_entry(entry: Any, podcast: Podcast) -> RawItem | None:
     )
 
 
+def _split_segments(raw: RawItem, max_sec: int) -> list[RawItem]:
+    """Split a long episode into daily segments of at most `max_sec` seconds.
+
+    Short episodes (duration unknown or within limit) are returned unchanged.
+    Each segment encodes its time window in external_id as ``::seg:{i}:{start}:{end}``
+    so that transcription can seek to the right position.
+    """
+    import math
+
+    if not raw.duration_sec or raw.duration_sec <= max_sec:
+        return [raw]
+
+    n = math.ceil(raw.duration_sec / max_sec)
+    segments: list[RawItem] = []
+    for i in range(n):
+        start = i * max_sec
+        end = min((i + 1) * max_sec, raw.duration_sec)
+        segments.append(
+            raw.model_copy(
+                update={
+                    "external_id": f"{raw.external_id}::seg:{i}:{start}:{end}",
+                    "title": f"{raw.title} [Part {i + 1}/{n}]",
+                    "duration_sec": end - start,
+                }
+            )
+        )
+    return segments
+
+
 def _weekday(settings: Settings) -> int:
     return datetime.now(ZoneInfo(settings.tz)).weekday()
 
@@ -88,13 +117,17 @@ async def run_ingest(
 ) -> dict[str, int]:
     """Ingest the latest episode(s) of every podcast due today. Returns
     per-podcast counts of newly stored episodes."""
+    max_seg_sec = settings.max_podcast_segment_min * 60
     counts: dict[str, int] = {}
     for podcast in due_today(_weekday(settings)):
         parsed = feedparser.parse(podcast.feed_url)
         stored = 0
         for entry in (parsed.entries or [])[:limit_per_feed]:
             raw = normalize_entry(entry, podcast)
-            if raw and repo.add_content(raw, settings.admin_user_id) is not None:
-                stored += 1
+            if raw is None:
+                continue
+            for segment in _split_segments(raw, max_seg_sec):
+                if repo.add_content(segment, settings.admin_user_id) is not None:
+                    stored += 1
         counts[podcast.name] = stored
     return counts

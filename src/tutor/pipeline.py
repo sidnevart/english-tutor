@@ -185,15 +185,54 @@ async def _resolve_audio(url: str, dest: Path) -> Path:
     return dest
 
 
+async def _clip_audio(src: Path, start_sec: int, duration_sec: int) -> Path:
+    """Extract a time window from an audio file using ffmpeg. Returns the clip path."""
+    import asyncio
+    import shutil
+
+    out = src.with_name(f"{src.stem}.seg{start_sec}.mp3")
+    if not shutil.which("ffmpeg"):
+        return src
+    proc = await asyncio.create_subprocess_exec(
+        "ffmpeg",
+        "-y",
+        "-ss",
+        str(start_sec),
+        "-i",
+        str(src),
+        "-t",
+        str(duration_sec),
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        str(out),
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    await proc.wait()
+    return out if proc.returncode == 0 and out.exists() else src
+
+
 async def ensure_transcript(svc: Services, content_id: int) -> str:
     """Lazily transcribe a podcast: download audio + run STT, fill body_text.
     No-op for items that already have text or no audio."""
+    import re
+
     content = svc.repo.get(content_id)
     if content is None:
         raise KeyError(f"content_item {content_id} not found")
     if content.body_text.strip() or not content.audio_url:
         return content.body_text
     audio = await _resolve_audio(content.audio_url, svc.settings.data_path / f"audio_{content_id}")
+
+    # Detect segment window encoded as ``::seg:{i}:{start}:{end}`` in external_id.
+    seg = re.search(r"::seg:\d+:(\d+):(\d+)$", content.external_id or "")
+    if seg:
+        start_sec = int(seg.group(1))
+        end_sec = int(seg.group(2))
+        audio = await _clip_audio(audio, start_sec, end_sec - start_sec)
+
     text = await svc.transcriber.transcribe(audio, lang=content.lang)
     text = await clean_transcript(svc.llm, text)  # strip ads / intros via LLM
     svc.repo.set_body_text(content_id, text)
