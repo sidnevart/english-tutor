@@ -59,52 +59,90 @@ def _present(term: str, text: str) -> bool:
     return re.search(rf"\b{re.escape(term)}\b", text, flags=re.IGNORECASE) is not None
 
 
-async def make_flashcards(llm: LLMClient, text: str, *, limit: int = 30) -> list[Card]:
-    """Generate Anki cards from a passage. Returns up to `limit` cards.
+# Chunking for long passages/transcripts: each chunk is extracted independently
+# (in parallel) and the results are merged + deduplicated. This makes extraction
+# genuinely exhaustive for long content instead of relying on one bounded call.
+_CHUNK_SIZE = 3000
+_MAX_CHUNKS = 24  # safety cap on parallel LLM calls (~72k chars of content)
 
-    The LLM is asked to be exhaustive; `limit` is a cap, not a target.
+
+def _chunks(text: str) -> list[str]:
+    if len(text) <= _CHUNK_SIZE:
+        return [text]
+    return [text[i : i + _CHUNK_SIZE] for i in range(0, len(text), _CHUNK_SIZE)][:_MAX_CHUNKS]
+
+
+def _card_from(fc: object, full_text: str) -> Card | None:
+    """Build a Card from one extracted item, verifying it occurs in the source."""
+    term = fc.term.strip()  # type: ignore[attr-defined]
+    if not term or not _present(term, full_text):
+        return None
+    parts: list[str] = [fc.definition.strip()]  # type: ignore[attr-defined]
+    if fc.example.strip():  # type: ignore[attr-defined]
+        parts.append(f"\n<i>{fc.example.strip()}</i>")  # type: ignore[attr-defined]
+    ru = getattr(fc, "translation_ru", "") or ""
+    if ru.strip():
+        parts.append(f"\n🇷🇺 {ru.strip()}")
+    back = "\n".join(parts)
+    tag_map = {
+        "phrasal_verb": "phrasal_verb",
+        "collocation": "collocation",
+        "idiom": "idiom",
+        "phrase": "phrase",
+    }
+    tag = tag_map.get(fc.kind.strip().lower(), "vocab")  # type: ignore[attr-defined]
+    return Card(front=term, back=back, tags=["toefl", tag])
+
+
+async def make_flashcards(
+    llm: LLMClient,
+    text: str,
+    *,
+    limit: int | None = None,
+    exclude: set[str] | None = None,
+) -> list[Card]:
+    """Generate Anki cards from a passage. `limit=None` means unlimited.
+
+    Long texts are split into chunks and extracted in parallel, then merged and
+    deduplicated by term. `exclude` is a set of lowercased terms already known to
+    the learner (e.g. previously generated cards) that should be skipped.
     """
+    import asyncio
+
     text = text.strip()
     if len(text) < 100:
         return []
-    user = (
+
+    chunks = _chunks(text)
+    user_tmpl = (
         "Extract ALL useful language items from this passage — be exhaustive, no cap. "
         "Include vocabulary, phrasal verbs, collocations, idioms, and academic phrases. "
         "Do not stop early.\n\n"
-        f"PASSAGE:\n{text}"
+        "PASSAGE:\n{chunk}"
     )
-    try:
-        payload = await llm.complete_json(_SYSTEM, user, FlashcardPayload)
-    except Exception:  # noqa: BLE001 — cards are best-effort, never block delivery
-        return []
+
+    async def _one(chunk: str) -> FlashcardPayload | None:
+        try:
+            return await llm.complete_json(_SYSTEM, user_tmpl.format(chunk=chunk), FlashcardPayload)
+        except Exception:  # noqa: BLE001 — cards are best-effort, never block delivery
+            return None
+
+    payloads = await asyncio.gather(*[_one(c) for c in chunks])
 
     cards: list[Card] = []
-    seen: set[str] = set()
-    for fc in payload.cards:
-        term = fc.term.strip()
-        key = term.lower()
-        if not term or key in seen or not _present(term, text):
+    seen: set[str] = set(exclude or set())
+    for payload in payloads:
+        if payload is None:
             continue
-        seen.add(key)
-
-        # Build card back: definition + example + Russian translation.
-        parts: list[str] = [fc.definition.strip()]
-        if fc.example.strip():
-            parts.append(f"\n<i>{fc.example.strip()}</i>")
-        ru = getattr(fc, "translation_ru", "") or ""
-        if ru.strip():
-            parts.append(f"\n🇷🇺 {ru.strip()}")
-        back = "\n".join(parts)
-
-        kind = fc.kind.strip().lower()
-        tag_map = {
-            "phrasal_verb": "phrasal_verb",
-            "collocation": "collocation",
-            "idiom": "idiom",
-            "phrase": "phrase",
-        }
-        tag = tag_map.get(kind, "vocab")
-        cards.append(Card(front=term, back=back, tags=["toefl", tag]))
-        if len(cards) >= limit:
-            break
+        for fc in payload.cards:
+            key = fc.term.strip().lower()
+            if not key or key in seen:
+                continue
+            card = _card_from(fc, text)
+            if card is None:
+                continue
+            seen.add(key)
+            cards.append(card)
+            if limit is not None and len(cards) >= limit:
+                return cards
     return cards

@@ -169,10 +169,18 @@ class Repository:
             qc = self.conn.execute(
                 """
                 INSERT INTO quiz_question
-                    (quiz_id, prompt, options_json, correct_index, explanation)
-                VALUES (?, ?, ?, ?, ?)
+                    (quiz_id, prompt, options_json, correct_index, explanation,
+                     correct_indices_json)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (quiz_id, q.prompt, json.dumps(q.options), q.correct_index, q.explanation),
+                (
+                    quiz_id,
+                    q.prompt,
+                    json.dumps(q.options),
+                    q.correct_index,
+                    q.explanation,
+                    json.dumps(q.correct_indices) if q.correct_indices else "",
+                ),
             )
             q.id = int(qc.lastrowid)
             q.quiz_id = quiz_id
@@ -197,6 +205,11 @@ class Repository:
                 prompt=r["prompt"],
                 options=json.loads(r["options_json"]),
                 correct_index=r["correct_index"],
+                correct_indices=(
+                    json.loads(r["correct_indices_json"])
+                    if (r["correct_indices_json"] or "").strip()
+                    else []
+                ),
                 explanation=r["explanation"],
             )
             for r in qrows
@@ -410,6 +423,25 @@ class Repository:
         ).fetchone()
         return int(row["c"])
 
+    def essay_scores(self, user_id: int) -> dict[str, object]:
+        """Summary of graded essays: average, count, and the most recent score."""
+        agg = self.conn.execute(
+            "SELECT AVG(score) AS avg, COUNT(score) AS n FROM essay "
+            "WHERE user_id = ? AND score IS NOT NULL",
+            (user_id,),
+        ).fetchone()
+        last = self.conn.execute(
+            "SELECT score, essay_type FROM essay "
+            "WHERE user_id = ? AND score IS NOT NULL ORDER BY created_at DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        return {
+            "avg": agg["avg"],
+            "count": int(agg["n"]),
+            "last": last["score"] if last else None,
+            "last_type": last["essay_type"] if last else None,
+        }
+
     def last_essay_type(self, user_id: int) -> str | None:
         """Return the essay_type of the most recent essay, or None."""
         row = self.conn.execute(
@@ -417,6 +449,73 @@ class Repository:
             (user_id,),
         ).fetchone()
         return row["essay_type"] if row else None
+
+    # ---- speaking attempts --------------------------------------------------
+    def save_speaking_attempt(
+        self,
+        user_id: int,
+        task_type: str,
+        prompt: str,
+        transcript: str,
+        *,
+        delivery: int | None,
+        language_use: int | None,
+        topic_dev: int | None,
+        score: int | None,
+        scaled_30: int | None,
+        feedback: str,
+    ) -> int:
+        cur = self.conn.execute(
+            """
+            INSERT INTO speaking_attempt
+                (user_id, task_type, prompt, transcript, delivery, language_use,
+                 topic_dev, score, scaled_30, feedback, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                task_type,
+                prompt,
+                transcript,
+                delivery,
+                language_use,
+                topic_dev,
+                score,
+                scaled_30,
+                feedback,
+                _now(),
+            ),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def last_speaking_type(self, user_id: int) -> str | None:
+        row = self.conn.execute(
+            "SELECT task_type FROM speaking_attempt WHERE user_id = ? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        return row["task_type"] if row else None
+
+    def speaking_scores(self, user_id: int) -> dict[str, object]:
+        """Summary of scored speaking attempts: average and most recent overall score."""
+        agg = self.conn.execute(
+            "SELECT AVG(score) AS avg, COUNT(score) AS n FROM speaking_attempt "
+            "WHERE user_id = ? AND score IS NOT NULL",
+            (user_id,),
+        ).fetchone()
+        last = self.conn.execute(
+            "SELECT score, scaled_30, task_type FROM speaking_attempt "
+            "WHERE user_id = ? AND score IS NOT NULL ORDER BY created_at DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        return {
+            "avg": agg["avg"],
+            "count": int(agg["n"]),
+            "last": last["score"] if last else None,
+            "last_scaled": last["scaled_30"] if last else None,
+            "last_type": last["task_type"] if last else None,
+        }
 
     # ---- topic progress -----------------------------------------------------
     def record_topic_progress(
@@ -535,6 +634,22 @@ class Repository:
         ).fetchone()
         return int(row["c"])
 
+    def latest_delivered_content(self, user_id: int) -> ContentItem | None:
+        """Return the most recently delivered article/podcast for the user."""
+        row = self.conn.execute(
+            "SELECT * FROM content_item WHERE user_id = ? AND delivered_at IS NOT NULL "
+            "ORDER BY delivered_at DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        return self._to_content(row) if row else None
+
+    def anki_fronts_for_content(self, content_id: int) -> set[str]:
+        """Return the set of lowercased card fronts already generated for an item."""
+        rows = self.conn.execute(
+            "SELECT front FROM anki_card WHERE content_id = ?", (content_id,)
+        ).fetchall()
+        return {r["front"].strip().lower() for r in rows}
+
     def get_anki_cards(self, user_id: int, limit: int = 300) -> list[tuple[str, str]]:
         rows = self.conn.execute(
             "SELECT a.front, a.back FROM anki_card a "
@@ -596,6 +711,10 @@ class Repository:
         # Essays.
         cur = self.conn.execute("DELETE FROM essay WHERE user_id = ?", (user_id,))
         counts["essays"] = cur.rowcount
+
+        # Speaking attempts.
+        cur = self.conn.execute("DELETE FROM speaking_attempt WHERE user_id = ?", (user_id,))
+        counts["speaking_attempts"] = cur.rowcount
 
         # Worksheets.
         cur = self.conn.execute("DELETE FROM worksheet WHERE user_id = ?", (user_id,))

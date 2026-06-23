@@ -25,7 +25,15 @@ from tutor.bot.conversation import (
     start_speaking,
     submit_essay,
 )
-from tutor.bot.keyboards import reset_confirm
+from tutor.bot.keyboards import reset_confirm, speaking_menu
+from tutor.bot.quiz import QuizState, handle_option, handle_submit, start_quiz
+from tutor.bot.speaking import (
+    SpeakingState,
+    cancel_speaking,
+    handle_response,
+    handle_voice_response,
+    start_speaking_task,
+)
 from tutor.domain.enums import DeliveryStatus
 from tutor.domain.models import Card
 from tutor.factory import Services
@@ -57,10 +65,11 @@ COMMANDS: list[tuple[str, str]] = [
     ("next", "Next reading or episode"),
     ("refresh", "Fetch new articles and podcasts now"),
     ("speak", "Speaking practice (voice)"),
+    ("speaking", "TOEFL Speaking (timed, scored)"),
     ("stop", "End the current practice session"),
     ("coach", "Adaptive coaching session"),
     ("review", "Evening review: grammar, vocab, listening"),
-    ("cards", "Today's Anki cards"),
+    ("cards", "Today's Anki cards (add 'more' for extra)"),
     ("progress", "Your stats and content queue"),
     ("write", "TOEFL essay practice"),
     ("reset", "Reset all progress and start fresh"),
@@ -81,8 +90,10 @@ HELP_TEXT = (
     "/homework - get today's homework file with reading, listening, "
     "and vocabulary exercises. Fill in your answers and send the file back!\n\n"
     "<b>\U0001f999 Speaking &amp; dialog</b>\n"
-    "/speak - start a spoken practice session: I set a TOEFL-style task, you "
-    "answer by voice or text, and we go back and forth\n"
+    "/speak - free-form spoken practice: I set a task, you answer by voice or "
+    "text, and we go back and forth\n"
+    "/speaking - strict TOEFL Speaking: pick one of the 4 official task types, "
+    "with timed prep/response and a 0-4 rubric score\n"
     "/coach - adaptive coaching session: I analyze your progress and target weak areas\n"
     "/coach &lt;question&gt; - a quick one-off question "
     "(e.g. <code>/coach what does 'ubiquitous' mean?</code>)\n"
@@ -92,7 +103,8 @@ HELP_TEXT = (
     "<b>\U0001f319 Review</b>\n"
     "/review - evening review: grammar, vocabulary &amp; listening at C1 level\n\n"
     "<b>\U0001f4ca Tracking</b>\n"
-    "/cards - today's Anki cards (add <code>all</code> for full deck)\n"
+    "/cards - today's Anki cards (add <code>all</code> for full deck, "
+    "<code>more</code> to generate extra cards from your latest material)\n"
     "/progress - your stats: cards, errors, recurring mistakes\n"
     "/reset - wipe all progress and start fresh (articles &amp; episodes stay)\n"
     "/worksheet - generate an evening practice worksheet (TOEFL format)\n\n"
@@ -124,7 +136,7 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         await message.answer(
             "👋 <b>TOEFL coach</b>\n"
             "• today's readings/episodes come with an Anki deck (words & idioms)\n"
-            "• tap &quot;📖 Quiz me&quot; for a comprehension quiz\n"
+            "• tap &quot;📖 Start quiz&quot; under an item for a TOEFL comprehension quiz\n"
             "• /speak for speaking practice · /progress for your stats"
         )
         if not await deliver_new(svc, user, limit=1):
@@ -138,6 +150,17 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
     async def on_speak(message: Message, state: FSMContext) -> None:
         await start_speaking(svc, bot, message.from_user.id, state)
 
+    @router.message(Command("speaking"))
+    async def on_speaking(message: Message) -> None:
+        """Strict TOEFL Speaking: pick one of the four official timed tasks."""
+        await svc.notifier.send(
+            message.from_user.id,
+            "🎙 <b>TOEFL Speaking practice</b>\n"
+            "Pick a task. I'll give you the material, time your preparation and "
+            "response, then score you on the official 0-4 rubric.",
+            speaking_menu(),
+        )
+
     @router.message(Command("stop"))
     async def on_stop(message: Message, state: FSMContext) -> None:
         current = await state.get_state()
@@ -148,6 +171,12 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         if current == ConversationState.essay:
             await state.clear()
             await message.answer("Essay cancelled. Use /write to start again.")
+            return
+        # Strict speaking task: cancel timers and the task.
+        if current == SpeakingState.active:
+            cancel_speaking(message.from_user.id)
+            await state.clear()
+            await message.answer("Speaking task cancelled. Use /speaking to start again.")
             return
         await end_session(svc, message.from_user.id, state)
 
@@ -242,6 +271,12 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
     async def on_cards(message: Message) -> None:
         user = message.from_user.id
         arg = (message.text or "").partition(" ")[2].strip().lower()
+        if arg == "more":
+            from tutor.pipeline import send_more_flashcards
+
+            await message.answer("🎴 Generating more cards from your latest material…")
+            await send_more_flashcards(svc, user)
+            return
         if arg == "all":
             pairs = svc.repo.get_anki_cards(user)
             label = "all time"
@@ -291,6 +326,26 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
             f"• Essays written: <b>{essays}</b>",
         ]
 
+        essay_stats = svc.repo.essay_scores(user)
+        if essay_stats["count"]:
+            avg = essay_stats["avg"] or 0.0
+            last = essay_stats["last"]
+            last_type = essay_stats["last_type"] or ""
+            parts.append(
+                f"• Writing score: avg <b>{avg:.1f}/5</b>"
+                + (f" · last {last}/5 ({last_type})" if last is not None else "")
+            )
+
+        spk_stats = svc.repo.speaking_scores(user)
+        if spk_stats["count"]:
+            savg = spk_stats["avg"] or 0.0
+            slast = spk_stats["last"]
+            sscaled = spk_stats["last_scaled"]
+            parts.append(
+                f"• Speaking score: avg <b>{savg:.1f}/4</b>"
+                + (f" · last {slast}/4 (~{sscaled}/30)" if slast is not None else "")
+            )
+
         if top_errors:
             lines = [
                 f'  • "{e["error_text"]}" → "{e["correction"]}" ({e["count"]}x)' for e in top_errors
@@ -315,18 +370,19 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
     @router.message(Command("reset"))
     async def on_reset(message: Message) -> None:
         """Ask for confirmation before wiping all progress."""
-        await message.answer(
+        await svc.notifier.send(
+            message.from_user.id,
             "⚠️ <b>Reset all progress?</b>\n\n"
             "This will delete:\n"
             "  • All quiz attempts &amp; scores\n"
             "  • All Anki cards\n"
             "  • All vocabulary items\n"
             "  • All session errors\n"
-            "  • All essays\n"
+            "  • All essays &amp; speaking attempts\n"
             "  • All topic progress\n\n"
             "Articles &amp; episodes will be kept and re-delivered.\n"
             "This cannot be undone.",
-            keyboard=reset_confirm(),
+            reset_confirm(),
         )
 
     @router.message(Command("worksheet"))
@@ -357,6 +413,27 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
     async def on_speak_cb(cb: CallbackQuery, state: FSMContext) -> None:
         await cb.answer()
         await start_speaking(svc, bot, cb.from_user.id, state)
+
+    @router.callback_query(F.data.startswith("quiz:start:"))
+    async def on_quiz_start(cb: CallbackQuery, state: FSMContext) -> None:
+        await cb.answer()
+        content_id = int(cb.data.split(":")[2])
+        await start_quiz(svc, bot, cb.from_user.id, state, content_id)
+
+    @router.callback_query(QuizState.active, F.data.startswith("quiz:opt:"))
+    async def on_quiz_opt(cb: CallbackQuery, state: FSMContext) -> None:
+        await cb.answer()
+        await handle_option(svc, bot, cb.from_user.id, state, int(cb.data.split(":")[2]))
+
+    @router.callback_query(QuizState.active, F.data == "quiz:submit")
+    async def on_quiz_submit(cb: CallbackQuery, state: FSMContext) -> None:
+        await cb.answer()
+        await handle_submit(svc, bot, cb.from_user.id, state)
+
+    @router.callback_query(F.data.startswith("spk:task:"))
+    async def on_speaking_task(cb: CallbackQuery, state: FSMContext) -> None:
+        await cb.answer()
+        await start_speaking_task(svc, bot, cb.from_user.id, state, cb.data.split(":")[2])
 
     @router.callback_query(F.data.startswith("reset:"))
     async def on_reset_cb(cb: CallbackQuery) -> None:
@@ -428,6 +505,17 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
     async def on_essay_text(message: Message, state: FSMContext) -> None:
         """Handle essay submission: user sends text while in essay mode."""
         await submit_essay(svc, message.from_user.id, state, message.text or "")
+
+    @router.message(SpeakingState.active, F.voice)
+    async def on_speaking_voice(message: Message, state: FSMContext) -> None:
+        if bot is None:
+            await message.answer("Voice isn't available right now. Type your answer instead.")
+            return
+        await handle_voice_response(svc, bot, message.from_user.id, state, message)
+
+    @router.message(SpeakingState.active, F.text)
+    async def on_speaking_text(message: Message, state: FSMContext) -> None:
+        await handle_response(svc, bot, message.from_user.id, state, message.text or "")
 
     @router.message(ConversationState.active, F.voice)
     async def on_session_voice(message: Message, state: FSMContext) -> None:

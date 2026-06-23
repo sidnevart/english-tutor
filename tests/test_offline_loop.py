@@ -56,7 +56,8 @@ async def test_full_loop_offline(tmp_path):
         assert svc.repo.get(cid).status == DeliveryStatus.DELIVERED
         notifier: StubNotifier = svc.notifier  # type: ignore[assignment]
         assert len(notifier.messages) == 1
-        assert notifier.messages[0].keyboard is None  # no inline quiz buttons
+        # Delivered items carry an inline "Start quiz" button.
+        assert notifier.messages[0].keyboard == [[("📖 Start quiz", f"quiz:start:{cid}")]]
 
         # 2) Evening evaluation (vocab deterministic + quiz via stub LLM)
         quiz = await build_evaluation(svc, cid, user)

@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS quiz_question (
     prompt        TEXT NOT NULL,
     options_json  TEXT NOT NULL,                 -- JSON array of strings
     correct_index INTEGER NOT NULL,
-    explanation   TEXT NOT NULL DEFAULT ''
+    explanation   TEXT NOT NULL DEFAULT '',
+    correct_indices_json TEXT NOT NULL DEFAULT ''  -- JSON int array for multi-select (summary)
 );
 
 CREATE TABLE IF NOT EXISTS vocab_item (
@@ -111,13 +112,30 @@ CREATE TABLE IF NOT EXISTS essay (
     user_id     INTEGER NOT NULL,
     prompt      TEXT NOT NULL,
     essay_text  TEXT NOT NULL,
-    score       INTEGER,                            -- 1-5 TOEFL scale
+    score       INTEGER,                            -- 0-5 TOEFL writing rubric
     feedback    TEXT NOT NULL,
     essay_type  TEXT NOT NULL,                       -- independent | integrated | email
     created_at  TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS ix_essay_user ON essay (user_id, created_at);
+
+CREATE TABLE IF NOT EXISTS speaking_attempt (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL,
+    task_type   TEXT NOT NULL,                       -- independent | campus | concept | lecture
+    prompt      TEXT NOT NULL,
+    transcript  TEXT NOT NULL DEFAULT '',
+    delivery    INTEGER,                             -- 0-4 rubric sub-score
+    language_use INTEGER,                            -- 0-4 rubric sub-score
+    topic_dev   INTEGER,                             -- 0-4 rubric sub-score
+    score       INTEGER,                             -- overall 0-4
+    scaled_30   INTEGER,                             -- estimated 0-30 scaled score
+    feedback    TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_speaking_user ON speaking_attempt (user_id, created_at);
 
 CREATE TABLE IF NOT EXISTS topic_progress (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,

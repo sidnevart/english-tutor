@@ -70,8 +70,15 @@ class QuizQuestion(BaseModel):
     prompt: str
     options: list[str] = Field(min_length=2)
     correct_index: int
+    # Non-empty only for multi-select (summary) questions: the set of correct
+    # option indices. Graded on the chosen set; `correct_index` is then unused.
+    correct_indices: list[int] = Field(default_factory=list)
     explanation: str = ""
     question_type: str = ""  # see eval/quiz_builder._QUESTION_TYPES
+
+    @property
+    def is_multi(self) -> bool:
+        return bool(self.correct_indices)
 
 
 class Quiz(BaseModel):

@@ -238,21 +238,28 @@ async def start_essay(svc: Services, bot: Any, user_id: int, state: FSMContext) 
 
     prompt_text = prompt_data["prompt"]
     passage = prompt_data.get("passage", "")
+    lecture = prompt_data.get("lecture", "")
 
     await state.set_state(ConversationState.essay)
     await state.update_data(
         essay_type=essay_type,
         essay_prompt=prompt_text,
         essay_passage=passage,
+        essay_lecture=lecture,
     )
 
     header = f"📝 <b>TOEFL Writing — {essay_type.title()}</b>\n\n"
     if passage:
+        await svc.notifier.send(user_id, header + f"<b>Read the passage:</b>\n{passage}")
+    if lecture:
+        # Deliver the lecture as text and (best-effort) as a voice note — the
+        # integrated task requires listening, mirroring the real exam.
+        await _say(svc, bot, user_id, f"🎧 <b>Now listen to the lecture:</b>\n{lecture}")
+    if passage or lecture:
         await svc.notifier.send(
             user_id,
-            header + f"<b>Read the passage:</b>\n{passage}\n\n"
             f"<b>Writing task:</b>\n{prompt_text}\n\n"
-            "Write your essay as a text message. Send /stop to cancel.",
+            "Write your response as a text message. Send /stop to cancel.",
         )
     else:
         await svc.notifier.send(
@@ -267,6 +274,8 @@ async def submit_essay(svc: Services, user_id: int, state: FSMContext, essay_tex
     data = await state.get_data()
     essay_type = data.get("essay_type", "independent")
     prompt = data.get("essay_prompt", "")
+    passage = data.get("essay_passage", "")
+    lecture = data.get("essay_lecture", "")
     await state.clear()
 
     if len(essay_text.strip()) < 50:
@@ -280,7 +289,9 @@ async def submit_essay(svc: Services, user_id: int, state: FSMContext, essay_tex
     await svc.notifier.send(user_id, "⏳ Evaluating your essay...")
 
     try:
-        eval_result = await evaluate_essay(svc.llm, prompt, essay_text, essay_type)
+        eval_result = await evaluate_essay(
+            svc.llm, prompt, essay_text, essay_type, passage=passage, lecture=lecture
+        )
 
         # Persist to DB.
         corrections_text = (
@@ -289,7 +300,7 @@ async def submit_essay(svc: Services, user_id: int, state: FSMContext, essay_tex
             else ""
         )
         feedback_summary = (
-            f"Score: {eval_result.score}/5\n"
+            f"Score: {eval_result.score}/5 (~{eval_result.scaled_30}/30)\n"
             f"Strengths: {', '.join(eval_result.strengths)}\n"
             f"Weaknesses: {', '.join(eval_result.weaknesses)}\n"
             f"Corrections:\n{corrections_text}\n"
@@ -321,9 +332,12 @@ async def submit_essay(svc: Services, user_id: int, state: FSMContext, essay_tex
             )
 
         # Build human-readable feedback.
-        score_emoji = {5: "🎉", 4: "👍", 3: "📝", 2: "📚", 1: "💪"}.get(eval_result.score, "📝")
+        score_emoji = {5: "🎉", 4: "👍", 3: "📝", 2: "📚", 1: "💪", 0: "💪"}.get(
+            eval_result.score, "📝"
+        )
         parts = [
-            f"{score_emoji} <b>Essay Score: {eval_result.score}/5</b>\n",
+            f"{score_emoji} <b>Essay Score: {eval_result.score}/5</b> "
+            f"(~{eval_result.scaled_30}/30 scaled)\n",
         ]
         if eval_result.strengths:
             parts.append("<b>Strengths:</b>")

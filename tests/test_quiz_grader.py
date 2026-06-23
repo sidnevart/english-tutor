@@ -145,3 +145,63 @@ def test_grader_scores_local_key_compare():
 
     correct, total = score(questions, {1: 1, 2: 1})  # q2 wrong
     assert (correct, total) == (1, 2)
+
+
+def test_mask_roundtrip():
+    from tutor.eval.grader import indices_to_mask, mask_to_indices
+
+    assert indices_to_mask([0, 2, 4]) == 0b10101
+    assert mask_to_indices(0b10101) == [0, 2, 4]
+    assert mask_to_indices(indices_to_mask([1, 3])) == [1, 3]
+
+
+def test_grader_multiselect_summary():
+    from tutor.eval.grader import indices_to_mask
+
+    q = QuizQuestion(
+        id=9,
+        prompt="Pick the 3 best summary statements.",
+        options=["a", "b", "c", "d", "e", "f"],
+        correct_index=0,
+        correct_indices=[0, 2, 4],
+    )
+    assert q.is_multi
+    # Exact set matches.
+    assert is_correct(q, indices_to_mask([0, 2, 4])) is True
+    # Wrong set (one swapped) fails.
+    assert is_correct(q, indices_to_mask([0, 2, 5])) is False
+    # Subset fails (must match the whole set).
+    assert is_correct(q, indices_to_mask([0, 2])) is False
+
+
+async def test_summary_question_conversion_and_persistence():
+    """A multi-select payload becomes a gradeable multi question and round-trips."""
+    from unittest.mock import AsyncMock
+
+    from tutor.eval.schemas import QuestionPayload, ReadingQuizPayload
+
+    payload = ReadingQuizPayload(
+        questions=[
+            QuestionPayload(
+                prompt="Summary — choose 3",
+                options=["a", "b", "c", "d", "e", "f"],
+                correct_index=0,
+                correct_indices=[0, 2, 4],
+                question_type="summary",
+            ),
+            QuestionPayload(
+                prompt="Multi with one out-of-range index gets filtered",
+                options=["a", "b", "c", "d"],
+                correct_index=0,
+                correct_indices=[1, 9],  # 9 dropped -> only [1] -> too few -> question dropped
+            ),
+        ]
+    )
+    mock_llm = AsyncMock()
+    mock_llm.complete_json = AsyncMock(return_value=payload)
+
+    quiz = await build_reading_quiz(mock_llm, _content(), n=10)
+    assert len(quiz) == 1
+    q = quiz[0]
+    assert q.is_multi
+    assert q.correct_indices == [0, 2, 4]
