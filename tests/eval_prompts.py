@@ -566,8 +566,14 @@ async def test_worksheet_generation_with_podcast():
     payload = await generate_worksheet(
         llm,
         vocab=[
-            VocabItem(content_id=1, word="thermohaline", definition="relating to temp & salinity", freq_rank=2.0),
-            VocabItem(content_id=1, word="bias", definition="systematic error in a dataset", freq_rank=3.0),
+            VocabItem(
+                content_id=1, word="thermohaline",
+                definition="relating to temp & salinity", freq_rank=2.0,
+            ),
+            VocabItem(
+                content_id=1, word="bias",
+                definition="systematic error in a dataset", freq_rank=3.0,
+            ),
         ],
         errors=[],
         articles=[article],

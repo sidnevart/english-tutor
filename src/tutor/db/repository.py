@@ -683,7 +683,9 @@ class Repository:
             for r in rows
         ]
 
-    def get_today_articles(self, user_id: int, limit: int = 2, days_back: int = 2) -> list[ContentItem]:
+    def get_today_articles(
+        self, user_id: int, limit: int = 2, days_back: int = 2
+    ) -> list[ContentItem]:
         """Return articles delivered in the last `days_back` days."""
         from datetime import timedelta
 
@@ -698,7 +700,9 @@ class Repository:
         ).fetchall()
         return [self._to_content(r) for r in rows]
 
-    def get_today_podcasts(self, user_id: int, limit: int = 2, days_back: int = 2) -> list[ContentItem]:
+    def get_today_podcasts(
+        self, user_id: int, limit: int = 2, days_back: int = 2
+    ) -> list[ContentItem]:
         """Return podcasts delivered in the last `days_back` days."""
         from datetime import timedelta
 
