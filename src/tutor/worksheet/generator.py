@@ -127,9 +127,7 @@ _PASS_THROUGH_LIMIT = 5000
 _CHUNK_SIZE = 3000
 
 
-async def _extract_chunks(
-    llm: LLMClient, text: str, title: str, max_chunks: int = 5
-) -> str:
+async def _extract_chunks(llm: LLMClient, text: str, title: str, max_chunks: int = 5) -> str:
     """Distil a long text into key facts by processing it in parallel chunks."""
     import asyncio
 
