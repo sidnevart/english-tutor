@@ -55,12 +55,13 @@ _ANTI_INJECTION = (
 COMMANDS: list[tuple[str, str]] = [
     ("start", "Today's material + quiz"),
     ("next", "Next reading or episode"),
+    ("refresh", "Fetch new articles and podcasts now"),
     ("speak", "Speaking practice (voice)"),
     ("stop", "End the current practice session"),
     ("coach", "Adaptive coaching session"),
     ("review", "Evening review: grammar, vocab, listening"),
     ("cards", "Today's Anki cards"),
-    ("progress", "Your stats"),
+    ("progress", "Your stats and content queue"),
     ("write", "TOEFL essay practice"),
     ("reset", "Reset all progress and start fresh"),
     ("worksheet", "Generate an evening practice worksheet"),
@@ -74,7 +75,8 @@ HELP_TEXT = (
     "<b>\U0001f4da Content</b>\n"
     "/start - register and deliver today's first reading or episode "
     "(with its words &amp; idioms Anki deck)\n"
-    "/next - deliver the next reading or episode\n\n"
+    "/next - deliver the next reading or episode\n"
+    "/refresh - fetch new articles &amp; podcasts right now (admin only)\n\n"
     "<b>\U0001f4dd Homework</b>\n"
     "/homework - get today's homework file with reading, listening, "
     "and vocabulary exercises. Fill in your answers and send the file back!\n\n"
@@ -154,6 +156,42 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         if not await deliver_new(svc, message.from_user.id, limit=1):
             await message.answer("No new material. It refreshes each morning.")
 
+    @router.message(Command("refresh"))
+    async def on_refresh(message: Message) -> None:
+        """Manually trigger content refresh (scrape + podcast ingest + Guardian articles)."""
+        from tutor.scheduler.jobs import refresh_content
+
+        user = message.from_user.id
+        if user != svc.settings.admin_user_id:
+            await message.answer("Not authorised.")
+            return
+        await message.answer("🔄 Fetching new content...")
+        result = await refresh_content(svc)
+        # Summarise what was added.
+        pod_counts: dict[str, int] = result.get("podcasts", {}) or {}
+        art_counts: dict[str, int] = result.get("articles", {}) or {}
+        ch_counts: dict[int, int] = result.get("channels", {}) or {}
+        pods_new = sum(pod_counts.values())
+        arts_new = sum(art_counts.values())
+        tg_new = sum(ch_counts.values())
+        lines = ["✅ <b>Refresh complete</b>\n"]
+        lines.append(f"📰 Articles from Guardian: <b>{arts_new}</b> new")
+        lines.append(f"📰 Articles from Telegram: <b>{tg_new}</b> new")
+        lines.append(f"🎧 Podcast episodes: <b>{pods_new}</b> new")
+        # Show queue breakdown.
+        queue = svc.repo.count_status_by_type(user, DeliveryStatus.NEW)
+        articles_q = queue.get("article", 0)
+        podcasts_q = queue.get("podcast", 0)
+        lines.append("\n<b>Queue (ready to deliver):</b>")
+        lines.append(f"  📰 articles: <b>{articles_q}</b>")
+        lines.append(f"  🎧 podcasts: <b>{podcasts_q}</b>")
+        if articles_q == 0:
+            lines.append(
+                "\n⚠️ No articles queued. Check that TG_API_ID/TG_API_HASH are set "
+                "and Telegram channels are reachable."
+            )
+        await message.answer("\n".join(lines))
+
     @router.message(Command("coach"))
     async def on_coach(message: Message, state: FSMContext) -> None:
         utterance = (message.text or "").partition(" ")[2].strip()
@@ -227,7 +265,8 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
     @router.message(Command("progress"))
     async def on_progress(message: Message) -> None:
         user = message.from_user.id
-        new = svc.repo.count_status(user, DeliveryStatus.NEW)
+        new_by_type = svc.repo.count_status_by_type(user, DeliveryStatus.NEW)
+        new = sum(new_by_type.values())
         delivered = svc.repo.count_status(user, DeliveryStatus.DELIVERED)
         reviewed = svc.repo.count_status(user, DeliveryStatus.REVIEWED)
         cards = svc.repo.anki_card_count(user)
@@ -238,13 +277,17 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         weak = svc.repo.weak_topics(user, limit=3)
         strong = svc.repo.strong_topics(user, limit=3)
 
+        arts_q = new_by_type.get("article", 0)
+        pods_q = new_by_type.get("podcast", 0)
+
         parts = [
             "📊 <b>Your progress</b>\n",
             f"🔥 Streak: <b>{streak} day(s)</b> in a row",
             f"• Anki cards: <b>{cards}</b>",
             f"• Delivered (awaiting practice): <b>{delivered}</b>",
             f"• Quizzed/reviewed: <b>{reviewed}</b>",
-            f"• Queued for delivery: <b>{new}</b>",
+            f"• Queued for delivery: <b>{new}</b>"
+            + (f"  (📰 {arts_q} articles · 🎧 {pods_q} podcasts)" if new else ""),
             f"• Essays written: <b>{essays}</b>",
         ]
 

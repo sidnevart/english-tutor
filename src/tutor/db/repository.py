@@ -510,6 +510,23 @@ class Repository:
         ).fetchone()
         return int(row["c"])
 
+    def count_status_by_type(self, user_id: int, status: DeliveryStatus) -> dict[str, int]:
+        """Return {content_type: count} for the given status."""
+        rows = self.conn.execute(
+            "SELECT content_type, count(*) AS c FROM content_item "
+            "WHERE user_id = ? AND status = ? GROUP BY content_type",
+            (user_id, status.value),
+        ).fetchall()
+        return {r["content_type"]: int(r["c"]) for r in rows}
+
+    def recent_job_logs(self, limit: int = 10) -> list[dict[str, str]]:
+        """Return the most recent schedule_log entries."""
+        rows = self.conn.execute(
+            "SELECT job, run_at, status, detail FROM schedule_log ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     def anki_card_count(self, user_id: int) -> int:
         row = self.conn.execute(
             "SELECT count(*) AS c FROM anki_card a "
