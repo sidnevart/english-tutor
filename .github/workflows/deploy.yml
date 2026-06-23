@@ -23,6 +23,7 @@ jobs:
           script_stop: true
           script: |
             cd /opt/english-tutor
+            git checkout -- uv.lock
             git pull --ff-only
             ~/.local/bin/uv sync --extra scrape
             systemctl restart english-tutor-bot
