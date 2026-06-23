@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     # ---- STT/TTS cloud (optional) ----
     groq_api_key: str = ""
     openai_api_key: str = ""
+    guardian_api_key: str = "test"  # free dev key; register at open-platform.theguardian.com
     stt_model: str = ""  # blank -> whisper-large-v3 (Groq) or whisper-1 (OpenAI)
     stt_max_seconds: int = 1800  # transcribe only the first N seconds (cost/size cap)
     max_podcast_segment_min: int = 25  # split episodes longer than this into daily segments

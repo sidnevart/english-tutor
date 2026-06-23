@@ -18,8 +18,13 @@ from tutor.pipeline import deliver_new
 
 
 async def refresh_content(svc: Services) -> dict[str, object]:
-    """Fetch fresh content: scrape channels + ingest podcasts. Each source is
-    isolated so a failure in one does not block the other or the morning push."""
+    """Fetch fresh content: scrape channels + ingest podcasts + Guardian articles.
+
+    Each source is isolated so a failure in one does not block the others.
+    Guardian article ingestion runs alongside Telegram scraping to guarantee
+    that articles are always available for the morning push.
+    """
+    from tutor.ingest.article_web import run_article_ingest
     from tutor.ingest.rss import run_ingest
     from tutor.ingest.telegram_scraper import run_scrape
 
@@ -34,6 +39,11 @@ async def refresh_content(svc: Services) -> dict[str, object]:
     except Exception as exc:  # noqa: BLE001
         svc.repo.log_job("ingest", "error", str(exc)[:200])
         result["podcasts"] = {}
+    try:
+        result["articles"] = await run_article_ingest(svc.settings, svc.repo)
+    except Exception as exc:  # noqa: BLE001
+        svc.repo.log_job("article_ingest", "error", str(exc)[:200])
+        result["articles"] = {}
     svc.repo.log_job("refresh_content", "ok", str(result)[:200])
     return result
 
