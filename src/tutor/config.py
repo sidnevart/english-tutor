@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     scrape_channels: str = "1137165265,1356345589"
     min_article_len: int = 350  # drop blurbs/ads shorter than this when scraping
     max_article_len: int = 4500  # ~700 words, TOEFL passage scale; skip longer articles
+    pdf_max_size_mb: int = 100  # max PDF size to download (MB)
+    pdf_articles_per_issue: int = 10  # max articles to extract per PDF
 
     # ---- Ollama / LLM ----
     ollama_base_url: str = "http://localhost:11434/v1"

@@ -25,7 +25,7 @@ async def refresh_content(svc: Services) -> dict[str, object]:
 
     result: dict[str, object] = {}
     try:
-        result["channels"] = await run_scrape(svc.settings, svc.repo)
+        result["channels"] = await run_scrape(svc.settings, svc.repo, llm=svc.llm)
     except Exception as exc:  # noqa: BLE001
         svc.repo.log_job("scrape", "error", str(exc)[:200])
         result["channels"] = {}
