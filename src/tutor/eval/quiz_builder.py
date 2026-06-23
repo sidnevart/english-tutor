@@ -53,7 +53,7 @@ _SYSTEM = (
     "   a key idea, reverse a relationship, or add unsupported information.\n\n"
     '7. summary — "An introductory sentence for a brief summary of the passage '
     '   is provided. Complete the summary by selecting the 3 key ideas."\n'
-    '   This is a MULTI-SELECT question: provide exactly 6 options and set '
+    "   This is a MULTI-SELECT question: provide exactly 6 options and set "
     '   "correct_indices" to the THREE 0-based indices that best summarize the '
     "   passage (major ideas, not minor details). The 3 wrong options state minor "
     "   details, are not mentioned, or contradict the passage. For this type set "
