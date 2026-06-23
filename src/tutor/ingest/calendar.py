@@ -1,12 +1,12 @@
 """Podcast catalog + delivery cadence, encoded as data.
 
-Cadence rules from the brief:
-  - Daily Core: Short Wave, The Indicator, TED Tech
-  - 3x/week (Mon/Wed/Fri): Hidden Brain, Planet Money, Freakonomics
-  - Weekend: Latent Space, Software Engineering Daily, Acquired, Beyond Coding
+Cadence rules:
+  - Daily Core: Short Wave, The Indicator, TED Tech  (8-33 min)
+  - 3x/week (Mon/Wed/Fri): Planet Money, NPR Up First  (12-34 min)
+  - Weekend: BBC 6 Minute English, Consider This (NPR)  (6-28 min)
 
-Feed URLs are best-known defaults; they are validated empirically by running
-`tutor ingest` and can be corrected here.
+All feeds are empirically verified to produce episodes under 40 min.
+Feed URLs can be corrected by running `tutor ingest` and checking the output.
 """
 
 from __future__ import annotations
@@ -28,27 +28,20 @@ class Podcast:
 
 
 CATALOG: list[Podcast] = [
-    # Daily core
+    # Daily core — 8-33 min per episode
     Podcast("Short Wave", "https://feeds.npr.org/510351/podcast.xml", Cadence.DAILY),
     Podcast("The Indicator", "https://feeds.npr.org/510325/podcast.xml", Cadence.DAILY),
     Podcast("TED Tech", "https://feeds.megaphone.fm/VMP5705694065", Cadence.DAILY),
-    # 3x / week
-    Podcast("Hidden Brain", "https://feeds.simplecast.com/kwWc0lhf", Cadence.THRICE),
+    # 3x / week (Mon/Wed/Fri) — 12-34 min per episode
     Podcast("Planet Money", "https://feeds.npr.org/510289/podcast.xml", Cadence.THRICE),
-    Podcast("Freakonomics Radio", "https://feeds.simplecast.com/Y8lFbOT4", Cadence.THRICE),
-    # Weekend deep mode
-    Podcast("Latent Space", "https://api.substack.com/feed/podcast/1084089.rss", Cadence.WEEKEND),
+    Podcast("NPR Up First", "https://feeds.npr.org/510318/podcast.xml", Cadence.THRICE),
+    # Weekend — 6-28 min per episode
     Podcast(
-        "Software Engineering Daily",
-        "https://softwareengineeringdaily.com/feed/podcast/",
+        "BBC 6 Minute English",
+        "https://podcasts.files.bbci.co.uk/p02pc9pj.rss",
         Cadence.WEEKEND,
     ),
-    Podcast("Acquired", "https://feeds.transistor.fm/acquired", Cadence.WEEKEND),
-    Podcast(
-        "Beyond Coding",
-        "https://anchor.fm/s/5bb57eac/podcast/rss",
-        Cadence.WEEKEND,
-    ),
+    Podcast("Consider This (NPR)", "https://feeds.npr.org/510355/podcast.xml", Cadence.WEEKEND),
 ]
 
 

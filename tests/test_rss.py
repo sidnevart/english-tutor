@@ -19,10 +19,10 @@ def test_due_today_cadence():
     assert {p.name for p in due_today(1)} == daily
     # Monday -> daily + thrice
     mon = {p.name for p in due_today(0)}
-    assert daily <= mon and "Planet Money" in mon and "Acquired" not in mon
+    assert daily <= mon and "NPR Up First" in mon and "BBC 6 Minute English" not in mon
     # Saturday -> daily + weekend
     sat = {p.name for p in due_today(5)}
-    assert daily <= sat and "Acquired" in sat and "Planet Money" not in sat
+    assert daily <= sat and "BBC 6 Minute English" in sat and "NPR Up First" not in sat
 
 
 def test_duration_parsing():
