@@ -683,25 +683,33 @@ class Repository:
             for r in rows
         ]
 
-    def get_today_articles(self, user_id: int, limit: int = 2) -> list[ContentItem]:
-        """Return articles delivered today."""
-        today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    def get_today_articles(self, user_id: int, limit: int = 2, days_back: int = 2) -> list[ContentItem]:
+        """Return articles delivered in the last `days_back` days."""
+        from datetime import timedelta
+
+        cutoff = (datetime.now(UTC) - timedelta(days=days_back)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ).isoformat()
         rows = self.conn.execute(
             "SELECT * FROM content_item "
             "WHERE user_id = ? AND content_type = 'article' AND delivered_at >= ? "
             "ORDER BY delivered_at DESC LIMIT ?",
-            (user_id, today, limit),
+            (user_id, cutoff, limit),
         ).fetchall()
         return [self._to_content(r) for r in rows]
 
-    def get_today_podcasts(self, user_id: int, limit: int = 2) -> list[ContentItem]:
-        """Return podcasts delivered today."""
-        today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    def get_today_podcasts(self, user_id: int, limit: int = 2, days_back: int = 2) -> list[ContentItem]:
+        """Return podcasts delivered in the last `days_back` days."""
+        from datetime import timedelta
+
+        cutoff = (datetime.now(UTC) - timedelta(days=days_back)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ).isoformat()
         rows = self.conn.execute(
             "SELECT * FROM content_item "
             "WHERE user_id = ? AND content_type = 'podcast' AND delivered_at >= ? "
             "ORDER BY delivered_at DESC LIMIT ?",
-            (user_id, today, limit),
+            (user_id, cutoff, limit),
         ).fetchall()
         return [self._to_content(r) for r in rows]
 

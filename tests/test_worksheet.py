@@ -9,6 +9,9 @@ from tutor.domain.enums import ContentType, SourceType
 from tutor.domain.models import ContentItem, VocabItem
 from tutor.worksheet.generator import (
     WorksheetPayload,
+    _PASS_THROUGH_LIMIT,
+    _extract_chunks,
+    _prepare_text,
     generate_worksheet,
     worksheet_from_json,
     worksheet_to_json,
@@ -74,6 +77,35 @@ def _article() -> ContentItem:
 # ---------------------------------------------------------------------------
 
 
+def _podcast() -> ContentItem:
+    return ContentItem(
+        id=2,
+        user_id=1,
+        source_type=SourceType.RSS,
+        source_ref="eval",
+        external_id="pod-test",
+        content_type=ContentType.PODCAST,
+        title="AI Ethics Podcast",
+        body_text="Welcome to today's episode about AI ethics. " * 20,
+        fetched_at=datetime.now(UTC),
+    )
+
+
+def _long_article() -> ContentItem:
+    """An article whose body_text exceeds _PASS_THROUGH_LIMIT."""
+    return ContentItem(
+        id=3,
+        user_id=1,
+        source_type=SourceType.CHANNEL,
+        source_ref="eval",
+        external_id="long-test",
+        content_type=ContentType.ARTICLE,
+        title="Long Article",
+        body_text="The ocean regulates Earth's climate. " * 200,  # ~7400 chars
+        fetched_at=datetime.now(UTC),
+    )
+
+
 async def test_generate_worksheet_with_stub():
     """Stub LLM should produce a valid worksheet payload."""
     payload = await generate_worksheet(StubLLMClient(), _vocab(), _errors(), [_article()])
@@ -85,6 +117,54 @@ async def test_generate_worksheet_with_stub():
 async def test_generate_worksheet_with_empty_data():
     """Generator should handle empty inputs gracefully."""
     payload = await generate_worksheet(StubLLMClient(), [], [], [])
+    assert isinstance(payload, WorksheetPayload)
+
+
+async def test_generate_worksheet_with_podcast():
+    """Worksheet generation with podcast input should not raise."""
+    payload = await generate_worksheet(
+        StubLLMClient(), _vocab(), _errors(), [_article()], podcasts=[_podcast()]
+    )
+    assert isinstance(payload, WorksheetPayload)
+
+
+async def test_prepare_text_short_passthrough():
+    """Short texts (< threshold) are returned verbatim without LLM call."""
+    item = _article()
+    assert len(item.body_text) < _PASS_THROUGH_LIMIT
+    result = await _prepare_text(StubLLMClient(), item)
+    assert result == item.body_text.strip()
+
+
+async def test_prepare_text_long_chunks():
+    """Long texts trigger chunked extraction and return extracted content."""
+    item = _long_article()
+    assert len(item.body_text) > _PASS_THROUGH_LIMIT
+    result = await _prepare_text(StubLLMClient(), item, max_chunks=2)
+    assert "Key content extracted from" in result
+    assert item.title in result
+
+
+async def test_prepare_text_empty_body():
+    """Empty body_text returns empty string without calling LLM."""
+    item = _article()
+    item = item.model_copy(update={"body_text": "   "})
+    result = await _prepare_text(StubLLMClient(), item)
+    assert result == ""
+
+
+async def test_extract_chunks_parallel():
+    """_extract_chunks should process multiple chunks and combine them."""
+    long_text = "fact about oceans. " * 300  # ~6000 chars → 2 chunks of 3000
+    result = await _extract_chunks(StubLLMClient(), long_text, title="Test", max_chunks=3)
+    assert "Key content extracted from 'Test'" in result
+    # Should have processed at least 2 chunks and joined results.
+    assert result.count("[stub-llm reply]") >= 2
+
+
+async def test_generate_worksheet_long_article():
+    """Worksheet generation with a long article should trigger chunking and still succeed."""
+    payload = await generate_worksheet(StubLLMClient(), [], [], [_long_article()])
     assert isinstance(payload, WorksheetPayload)
 
 

@@ -116,11 +116,51 @@ _SYSTEM = (
 )
 
 
+_EXTRACT_SYSTEM = (
+    "Extract the 5-7 most important facts, claims, arguments, and specific details "
+    "(names, numbers, dates, key terms) from this text excerpt. "
+    "Output as a concise bulleted list. English only. No commentary."
+)
+
+# Texts shorter than this are passed to the LLM as-is.
+_PASS_THROUGH_LIMIT = 5000
+_CHUNK_SIZE = 3000
+
+
+async def _extract_chunks(
+    llm: LLMClient, text: str, title: str, max_chunks: int = 5
+) -> str:
+    """Distil a long text into key facts by processing it in parallel chunks."""
+    import asyncio
+
+    chunks = [text[i : i + _CHUNK_SIZE] for i in range(0, len(text), _CHUNK_SIZE)][:max_chunks]
+
+    async def _one(idx: int, chunk: str) -> str:
+        prompt = f"Excerpt {idx + 1}/{len(chunks)} from '{title}':\n\n{chunk}"
+        return await llm.complete(_EXTRACT_SYSTEM, prompt)
+
+    results = await asyncio.gather(*[_one(i, c) for i, c in enumerate(chunks)])
+    header = f"[Key content extracted from '{title}' — {len(chunks)} section(s)]"
+    return header + "\n\n" + "\n\n".join(results)
+
+
+async def _prepare_text(llm: LLMClient, item: ContentItem, max_chunks: int = 5) -> str:
+    """Return text ready for the worksheet prompt — chunked if it exceeds the threshold."""
+    text = item.body_text.strip()
+    if not text:
+        return ""
+    if len(text) <= _PASS_THROUGH_LIMIT:
+        return text
+    return await _extract_chunks(llm, text, item.title or "Untitled", max_chunks=max_chunks)
+
+
 def _user_prompt(
     vocab: list[VocabItem],
     errors: list[dict[str, str]],
     articles: list[ContentItem],
-    podcasts: list[ContentItem] | None = None,
+    article_texts: list[str],
+    podcasts: list[ContentItem],
+    podcast_texts: list[str],
 ) -> str:
     parts: list[str] = []
 
@@ -141,18 +181,16 @@ def _user_prompt(
     else:
         parts.append("\nTODAY'S SPEAKING ERRORS: (none — generate common B2-C1 grammar traps)")
 
-    # Articles.
-    for i, art in enumerate(articles[:2]):
-        text = art.body_text.strip()[:2000]  # cap to avoid token overflow
-        parts.append(f"\nARTICLE {i + 1} ({art.title or 'Untitled'}):\n{text}")
-
-    if not articles:
+    # Articles (pre-processed texts).
+    if articles:
+        for i, (art, text) in enumerate(zip(articles, article_texts, strict=True)):
+            parts.append(f"\nARTICLE {i + 1} ({art.title or 'Untitled'}):\n{text}")
+    else:
         parts.append("\nARTICLES: (none available)")
 
-    # Podcast transcripts.
+    # Podcast transcripts (pre-processed texts).
     if podcasts:
-        for i, pod in enumerate(podcasts[:2]):
-            text = pod.body_text.strip()[:2000]
+        for i, (pod, text) in enumerate(zip(podcasts, podcast_texts, strict=True)):
             parts.append(f"\nPODCAST TRANSCRIPT {i + 1} ({pod.title or 'Untitled'}):\n{text}")
     else:
         parts.append("\nPODCAST TRANSCRIPTS: (none available)")
@@ -168,7 +206,18 @@ async def generate_worksheet(
     podcasts: list[ContentItem] | None = None,
 ) -> WorksheetPayload:
     """Generate a complete worksheet from today's data."""
-    user = _user_prompt(vocab, errors, articles, podcasts)
+    import asyncio
+
+    articles = articles[:2]
+    pods = [p for p in (podcasts or [])[:2] if p.body_text.strip()]
+
+    # Pre-process all long texts in parallel.
+    article_texts, podcast_texts = await asyncio.gather(
+        asyncio.gather(*[_prepare_text(llm, a, max_chunks=4) for a in articles]),
+        asyncio.gather(*[_prepare_text(llm, p, max_chunks=6) for p in pods]),
+    )
+
+    user = _user_prompt(vocab, errors, articles, list(article_texts), pods, list(podcast_texts))
     return await llm.complete_json(_SYSTEM, user, WorksheetPayload)
 
 

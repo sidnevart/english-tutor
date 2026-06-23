@@ -18,9 +18,10 @@ import pytest
 
 from tutor.adapters.llm.ollama import OllamaLLMClient
 from tutor.domain.enums import ContentType, SourceType
-from tutor.domain.models import ContentItem
+from tutor.domain.models import ContentItem, VocabItem
 from tutor.eval.flashcards import make_flashcards
 from tutor.eval.quiz_builder import build_listening_quiz, build_reading_quiz
+from tutor.worksheet.generator import generate_worksheet
 
 # ---------------------------------------------------------------------------
 # Test data: real TOEFL-like passages and podcast transcripts
@@ -486,6 +487,125 @@ async def test_flashcard_limit_comparison():
             "limit_30_count": len(cards_30),
             "overlap": f"{overlap:.0%}",
             "unique_in_30": len(terms_30 - terms_10),
+        },
+    )
+
+
+# ===========================================================================
+# WORKSHEET GENERATION EVALS
+# ===========================================================================
+
+WORKSHEET_JUDGE = (
+    "You are evaluating a TOEFL-style homework worksheet generated from an article "
+    "and a podcast transcript. Rate on a scale of 1-5 for each dimension:\n\n"
+    "1. READING_QUIZ_QUALITY (1-5): Are reading questions grounded in the article? "
+    "Correct difficulty (B2-C1)? 4-option MCQ with plausible distractors?\n"
+    "2. LISTENING_QUIZ_QUALITY (1-5): Are listening questions grounded in the podcast "
+    "transcript? Do they test spoken-language comprehension (gist, detail, inference)?\n"
+    "3. FILL_BLANKS_QUALITY (1-5): Are fill-in-the-blank items testing vocabulary in "
+    "context, not isolated words? All 4 options grammatically possible?\n"
+    "4. OVERALL_COHERENCE (1-5): Is the worksheet coherent as a whole? No repeated "
+    "questions across sections? All answers derivable from the provided materials?\n\n"
+    'Return: {"scores": {dim: score}, "issues": ["list any serious problems"], '
+    '"notes": "brief summary"}'
+)
+
+# Long article (> 5000 chars) to exercise chunked processing.
+LONG_ARTICLE = {
+    "id": "long_climate",
+    "title": "Ocean Currents and Climate Regulation — Extended Study",
+    "text": (
+        ARTICLES[0]["text"] * 3  # ~5400 chars, triggers chunking
+    ),
+}
+
+
+@pytest.mark.skipif(not _is_real_llm(), reason="Requires Ollama")
+async def test_worksheet_generation_with_long_article():
+    """Full worksheet generated from a long article — verifies chunked extraction works."""
+    llm = _get_llm()
+    article = _make_content(LONG_ARTICLE, ContentType.ARTICLE)
+
+    payload = await generate_worksheet(
+        llm,
+        vocab=[],
+        errors=[],
+        articles=[article],
+    )
+
+    assert payload.reading_quiz, "reading_quiz should be populated from the article"
+    assert len(payload.reading_quiz) >= 2
+    for q in payload.reading_quiz:
+        assert len(q.options) == 4
+        assert 0 <= q.correct_index < 4
+        assert q.prompt.strip()
+
+    _store_result(
+        "worksheet_long_article",
+        LONG_ARTICLE["id"],
+        {
+            "article_chars": len(LONG_ARTICLE["text"]),
+            "reading_quiz_count": len(payload.reading_quiz),
+            "fill_blanks_count": len(payload.fill_blanks),
+            "error_correction_count": len(payload.error_correction),
+            "sample_questions": [
+                {"prompt": q.prompt[:80], "correct": q.correct_index}
+                for q in payload.reading_quiz[:3]
+            ],
+        },
+    )
+
+
+@pytest.mark.skipif(not _is_real_llm(), reason="Requires Ollama")
+async def test_worksheet_generation_with_podcast():
+    """Full worksheet generated from article + podcast — verifies listening_quiz."""
+    llm = _get_llm()
+    article = _make_content(ARTICLES[0], ContentType.ARTICLE)
+    podcast = _make_content(PODCASTS[0], ContentType.PODCAST)
+
+    payload = await generate_worksheet(
+        llm,
+        vocab=[
+            VocabItem(content_id=1, word="thermohaline", definition="relating to temp & salinity", freq_rank=2.0),
+            VocabItem(content_id=1, word="bias", definition="systematic error in a dataset", freq_rank=3.0),
+        ],
+        errors=[],
+        articles=[article],
+        podcasts=[podcast],
+    )
+
+    assert payload.reading_quiz, "reading_quiz must be populated"
+    assert payload.listening_quiz, "listening_quiz must be populated"
+
+    for q in payload.reading_quiz + payload.listening_quiz:
+        assert len(q.options) == 4
+        assert 0 <= q.correct_index < 4
+
+    # LLM judge.
+    quiz_summary = (
+        f"READING QUIZ ({len(payload.reading_quiz)} questions):\n"
+        + "\n".join(f"  Q: {q.prompt[:80]}" for q in payload.reading_quiz)
+        + f"\n\nLISTENING QUIZ ({len(payload.listening_quiz)} questions):\n"
+        + "\n".join(f"  Q: {q.prompt[:80]}" for q in payload.listening_quiz)
+        + f"\n\nFILL BLANKS: {len(payload.fill_blanks)} items"
+        + f"\nERROR CORRECTION: {len(payload.error_correction)} items"
+    )
+    judge_prompt = (
+        f"ARTICLE ({ARTICLES[0]['title']}):\n{ARTICLES[0]['text'][:800]}\n\n"
+        f"PODCAST ({PODCASTS[0]['title']}):\n{PODCASTS[0]['text'][:800]}\n\n"
+        f"GENERATED WORKSHEET:\n{quiz_summary}\n\n"
+        "Rate each dimension 1-5."
+    )
+    judge_response = await llm.complete(WORKSHEET_JUDGE, judge_prompt)
+
+    _store_result(
+        "worksheet_full",
+        "article_plus_podcast",
+        {
+            "reading_quiz_count": len(payload.reading_quiz),
+            "listening_quiz_count": len(payload.listening_quiz),
+            "fill_blanks_count": len(payload.fill_blanks),
+            "judge": judge_response[:1500],
         },
     )
 
