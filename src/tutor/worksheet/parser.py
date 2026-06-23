@@ -50,6 +50,21 @@ def parse_collocation_matches(text: str) -> list[str]:
     return [r.upper() for r in rows]
 
 
+def parse_quiz_section(text: str, section_heading: str) -> list[str]:
+    """Extract answers from a quiz section (Reading or Listening Comprehension).
+
+    Looks for 'Your answer:' lines within the specified section.
+    """
+    # Find the section.
+    pattern = rf"## {re.escape(section_heading)}.*?(?=## |\Z)"
+    section_match = re.search(pattern, text, re.DOTALL)
+    if not section_match:
+        return []
+    section_text = section_match.group()
+    matches = re.findall(r"\*\*Your answer:\*\*\s*(.+)", section_text)
+    return [m.strip().upper() for m in matches]
+
+
 def parse_worksheet_answers(text: str) -> dict[str, list]:
     """Parse all answer types from a filled-in worksheet file.
 
@@ -60,6 +75,8 @@ def parse_worksheet_answers(text: str) -> dict[str, list]:
         "error_correction": parse_error_corrections(text),
         "sentence_transform": parse_sentence_transforms(text),
         "collocation_match": parse_collocation_matches(text),
+        "reading_quiz": parse_quiz_section(text, "Part 6: Reading Comprehension"),
+        "listening_quiz": parse_quiz_section(text, "Part 7: Listening Comprehension"),
     }
 
 

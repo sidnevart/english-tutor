@@ -9,7 +9,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from tutor.bot.keyboards import quiz_invite
 from tutor.domain.enums import ContentType, DeliveryStatus, QuizKind
 from tutor.domain.models import AnkiResult, Quiz
 from tutor.eval.anki_cards import build_cards
@@ -204,10 +203,6 @@ async def ensure_transcript(svc: Services, content_id: int) -> str:
     return text
 
 
-def _quiz_label(item) -> str:
-    return "🎧 Listening quiz" if item.content_type == ContentType.PODCAST else "📖 Quiz me"
-
-
 async def send_flashcards(svc: Services, user_id: int, content_id: int) -> int:
     """Generate words+idioms Anki cards for an item and send the deck. Resilient:
     a failure (LLM/STT/network) is logged and never blocks delivery. Returns the
@@ -252,9 +247,7 @@ async def deliver_new(
         if item.content_type == ContentType.ARTICLE and len(item.body_text) > max_len:
             svc.repo.set_body_text(item.id, item.body_text[:max_len] + "…")
             item = svc.repo.get(item.id) or item
-        await svc.notifier.send(
-            user_id, render_card(item), keyboard=quiz_invite(item.id, _quiz_label(item))
-        )
+        await svc.notifier.send(user_id, render_card(item))
         svc.repo.mark_delivered(item.id)
         await send_flashcards(svc, user_id, item.id)
         delivered.append(item.id)

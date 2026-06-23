@@ -80,6 +80,37 @@ def render_worksheet_md(payload: WorksheetPayload, date: str = "") -> str:
             parts.append(f"| {col.word} | {opts_str} |")
         parts.append("")
 
+    # Part 6: Reading Comprehension
+    if payload.reading_quiz:
+        n_reading = len(payload.reading_quiz)
+        parts.append(f"\n## Part 6: Reading Comprehension ({n_reading} questions)\n")
+        parts.append("*Read each question carefully and choose the best answer.*\n")
+        # Group by source title.
+        current_title = ""
+        for i, q in enumerate(payload.reading_quiz, 1):
+            if q.source_title and q.source_title != current_title:
+                current_title = q.source_title
+                parts.append(f"### 📰 {current_title}\n")
+            parts.append(f"**{i}.** {q.prompt}\n")
+            opts = "  ".join(f"{_LETTERS[j]}) {opt}" for j, opt in enumerate(q.options))
+            parts.append(f"   {opts}\n")
+            parts.append("   **Your answer:** ____\n")
+
+    # Part 7: Listening Comprehension
+    if payload.listening_quiz:
+        n_listening = len(payload.listening_quiz)
+        parts.append(f"\n## Part 7: Listening Comprehension ({n_listening} questions)\n")
+        parts.append("*Answer questions about the podcast episodes you listened to.*\n")
+        current_title = ""
+        for i, q in enumerate(payload.listening_quiz, 1):
+            if q.source_title and q.source_title != current_title:
+                current_title = q.source_title
+                parts.append(f"### 🎧 {current_title}\n")
+            parts.append(f"**{i}.** {q.prompt}\n")
+            opts = "  ".join(f"{_LETTERS[j]}) {opt}" for j, opt in enumerate(q.options))
+            parts.append(f"   {opts}\n")
+            parts.append("   **Your answer:** ____\n")
+
     # Summary
     parts.append("\n---\n")
     parts.append("## Summary\n")

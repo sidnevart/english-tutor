@@ -81,6 +81,18 @@ def _deterministic_score(payload: WorksheetPayload, answers: dict[str, list]) ->
         )
         scores["collocation_match"] = scored / total if total else 0.0
 
+    # Reading comprehension quiz.
+    if payload.reading_quiz:
+        correct = [q.correct_index for q in payload.reading_quiz]
+        scored, total = _score_multiple_choice(correct, answers.get("reading_quiz", []))
+        scores["reading_quiz"] = scored / total if total else 0.0
+
+    # Listening comprehension quiz.
+    if payload.listening_quiz:
+        correct = [q.correct_index for q in payload.listening_quiz]
+        scored, total = _score_multiple_choice(correct, answers.get("listening_quiz", []))
+        scores["listening_quiz"] = scored / total if total else 0.0
+
     return scores
 
 
@@ -191,5 +203,7 @@ async def grade_worksheet(
         + len(payload.sentence_transform)
         + sum(len(s.questions) for s in payload.mini_reading)
         + len(payload.collocation_match)
+        + len(payload.reading_quiz)
+        + len(payload.listening_quiz)
     )
     return _build_feedback(det_scores, llm_result, total)

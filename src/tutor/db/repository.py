@@ -694,6 +694,17 @@ class Repository:
         ).fetchall()
         return [self._to_content(r) for r in rows]
 
+    def get_today_podcasts(self, user_id: int, limit: int = 2) -> list[ContentItem]:
+        """Return podcasts delivered today."""
+        today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        rows = self.conn.execute(
+            "SELECT * FROM content_item "
+            "WHERE user_id = ? AND content_type = 'podcast' AND delivered_at >= ? "
+            "ORDER BY delivered_at DESC LIMIT ?",
+            (user_id, today, limit),
+        ).fetchall()
+        return [self._to_content(r) for r in rows]
+
     def worksheet_count(self, user_id: int) -> int:
         """Return total worksheets completed (graded)."""
         row = self.conn.execute(

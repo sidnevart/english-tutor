@@ -119,18 +119,7 @@ async def daytime_checkin(svc: Services, user_id: int) -> None:
         if streak > 0 and reviewed:
             parts.append(f"\n🔥 Streak: <b>{streak} day(s)</b>")
 
-        # Add keyboard with quiz buttons for unreviewed items.
-        keyboard = []
-        for it in delivered[:2]:
-            is_pod = it.content_type == ContentType.PODCAST
-            label = "🎧 Listening quiz" if is_pod else "📖 Quiz me"
-            keyboard.append([(label, f"quiz:{it.id}")])
-
-        await svc.notifier.send(
-            user_id,
-            "\n".join(parts),
-            keyboard=keyboard if keyboard else None,
-        )
+        await svc.notifier.send(user_id, "\n".join(parts))
         svc.repo.log_job(
             "daytime_checkin", "ok", f"reviewed={len(reviewed)} delivered={len(delivered)}"
         )
@@ -262,6 +251,103 @@ async def evening_worksheet(svc: Services, user_id: int) -> None:
         )
     except Exception as exc:  # noqa: BLE001
         svc.repo.log_job("evening_worksheet", "error", str(exc)[:200])
+
+
+async def homework_push(svc: Services, user_id: int) -> None:
+    """Generate and send a homework file with all of today's assignments.
+
+    Combines reading comprehension (articles), listening comprehension (podcasts),
+    vocabulary exercises, error correction, and more into a single printable file.
+    The user fills it in at their own pace and sends it back for grading.
+    """
+    from pathlib import Path
+
+    from tutor.pipeline import ensure_transcript
+    from tutor.worksheet.generator import generate_worksheet, worksheet_to_json
+    from tutor.worksheet.renderer import render_worksheet_md, render_worksheet_pdf
+
+    try:
+        # Collect today's data.
+        vocab = svc.repo.get_vocab_today(user_id, limit=15)
+        errors = svc.repo.recent_session_errors(user_id, limit=5)
+        articles = svc.repo.get_today_articles(user_id, limit=2)
+        podcasts = svc.repo.get_today_podcasts(user_id, limit=2)
+
+        if not vocab and not articles and not podcasts:
+            await svc.notifier.send(
+                user_id,
+                "📝 No materials today for homework. "
+                "Wait for the morning push or use /next to get content!",
+            )
+            return
+
+        # Ensure podcast transcripts are available.
+        for pod in podcasts:
+            if not pod.body_text.strip():
+                try:
+                    await ensure_transcript(svc, pod.id)
+                except Exception:  # noqa: BLE001
+                    pass  # Skip podcasts that fail to transcribe.
+        # Re-fetch podcasts with transcripts.
+        if podcasts:
+            podcasts = svc.repo.get_today_podcasts(user_id, limit=2)
+
+        # Generate exercises (including reading/listening quizzes).
+        payload = await generate_worksheet(svc.llm, vocab, errors, articles, podcasts)
+
+        # Save to DB.
+        items_json = worksheet_to_json(payload)
+        worksheet_id = svc.repo.save_worksheet(user_id, items_json)
+
+        # Render files.
+        from datetime import UTC, datetime
+
+        date_str = datetime.now(UTC).strftime("%Y-%m-%d")
+        md_content = render_worksheet_md(payload, date=date_str)
+
+        md_path = Path(svc.settings.data_dir) / f"homework_{date_str}.md"
+        md_path.parent.mkdir(parents=True, exist_ok=True)
+        md_path.write_text(md_content, encoding="utf-8")
+
+        pdf_path = render_worksheet_pdf(md_content, md_path.with_suffix(".pdf"))
+
+        # Count sections for the summary.
+        sections: list[str] = []
+        if payload.reading_quiz:
+            sections.append(f"  • {len(payload.reading_quiz)} reading comprehension questions")
+        if payload.listening_quiz:
+            sections.append(f"  • {len(payload.listening_quiz)} listening comprehension questions")
+        if payload.fill_blanks:
+            sections.append(f"  • {len(payload.fill_blanks)} fill-in-the-blank questions")
+        if payload.error_correction:
+            sections.append(f"  • {len(payload.error_correction)} error corrections")
+        if payload.sentence_transform:
+            sections.append(f"  • {len(payload.sentence_transform)} sentence transformations")
+        if payload.mini_reading:
+            sections.append(
+                f"  • {sum(len(s.questions) for s in payload.mini_reading)} mini reading questions"
+            )
+        if payload.collocation_match:
+            sections.append(f"  • {len(payload.collocation_match)} collocation matches")
+
+        # Send to user.
+        await svc.notifier.send(
+            user_id,
+            f"📝 <b>Homework — {date_str}</b>\n\n"
+            f"Today's assignments:\n"
+            + "\n".join(sections)
+            + "\n\nFill in your answers and send the .md file back when done!",
+        )
+        await svc.notifier.send_file(user_id, md_path, caption="Homework (Markdown)")
+        await svc.notifier.send_file(user_id, pdf_path, caption="Homework (PDF)")
+
+        svc.repo.log_job(
+            "homework_push",
+            "ok",
+            f"worksheet_id={worksheet_id} articles={len(articles)} podcasts={len(podcasts)}",
+        )
+    except Exception as exc:  # noqa: BLE001
+        svc.repo.log_job("homework_push", "error", str(exc)[:200])
 
 
 async def essay_reminder(svc: Services, user_id: int) -> None:

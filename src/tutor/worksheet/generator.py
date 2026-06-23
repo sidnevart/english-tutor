@@ -50,12 +50,34 @@ class CollocationMatch(BaseModel):
     distractors: list[str] = Field(min_length=3, max_length=3)
 
 
+class ReadingQuizItem(BaseModel):
+    """Reading comprehension question from an article."""
+
+    source_title: str = ""
+    prompt: str
+    options: list[str] = Field(min_length=4, max_length=4)
+    correct_index: int = Field(ge=0, le=3)
+    explanation: str = ""
+
+
+class ListeningQuizItem(BaseModel):
+    """Listening comprehension question from a podcast."""
+
+    source_title: str = ""
+    prompt: str
+    options: list[str] = Field(min_length=4, max_length=4)
+    correct_index: int = Field(ge=0, le=3)
+    explanation: str = ""
+
+
 class WorksheetPayload(BaseModel):
     fill_blanks: list[FillBlank] = Field(default_factory=list)
     error_correction: list[ErrorCorrection] = Field(default_factory=list)
     sentence_transform: list[SentenceTransform] = Field(default_factory=list)
     mini_reading: list[MiniReading] = Field(default_factory=list)
     collocation_match: list[CollocationMatch] = Field(default_factory=list)
+    reading_quiz: list[ReadingQuizItem] = Field(default_factory=list)
+    listening_quiz: list[ListeningQuizItem] = Field(default_factory=list)
 
 
 _SYSTEM = (
@@ -77,11 +99,20 @@ _SYSTEM = (
     "Generate 3 TOEFL-format questions: 1 factual, 1 inference, 1 vocab-in-context.\n\n"
     "5. collocation_match (5 items): Pair vocabulary words with their natural "
     "academic collocations. Include 3 plausible distractors per word.\n\n"
+    "6. reading_quiz (3 items per article): For each article provided, generate "
+    "3 TOEFL iBT Reading section questions: 1 factual information, 1 inference, "
+    "1 vocabulary-in-context. Use 4 multiple-choice options. Set source_title to "
+    "the article title.\n\n"
+    "7. listening_quiz (3 items per podcast): For each podcast transcript provided, "
+    "generate 3 TOEFL iBT Listening section questions: 1 gist-content, 1 detail, "
+    "1 inference. Use 4 multiple-choice options. Set source_title to the episode title.\n\n"
     "RULES:\n"
     "- All content must come from the provided input data\n"
     "- Difficulty: B2-C1 (TOEFL level)\n"
     "- All text in English\n"
-    "- Be precise with correct_index values"
+    "- Be precise with correct_index values\n"
+    "- If no articles provided, set reading_quiz to empty list\n"
+    "- If no podcast transcripts provided, set listening_quiz to empty list"
 )
 
 
@@ -89,6 +120,7 @@ def _user_prompt(
     vocab: list[VocabItem],
     errors: list[dict[str, str]],
     articles: list[ContentItem],
+    podcasts: list[ContentItem] | None = None,
 ) -> str:
     parts: list[str] = []
 
@@ -117,6 +149,14 @@ def _user_prompt(
     if not articles:
         parts.append("\nARTICLES: (none available)")
 
+    # Podcast transcripts.
+    if podcasts:
+        for i, pod in enumerate(podcasts[:2]):
+            text = pod.body_text.strip()[:2000]
+            parts.append(f"\nPODCAST TRANSCRIPT {i + 1} ({pod.title or 'Untitled'}):\n{text}")
+    else:
+        parts.append("\nPODCAST TRANSCRIPTS: (none available)")
+
     return "\n".join(parts)
 
 
@@ -125,9 +165,10 @@ async def generate_worksheet(
     vocab: list[VocabItem],
     errors: list[dict[str, str]],
     articles: list[ContentItem],
+    podcasts: list[ContentItem] | None = None,
 ) -> WorksheetPayload:
     """Generate a complete worksheet from today's data."""
-    user = _user_prompt(vocab, errors, articles)
+    user = _user_prompt(vocab, errors, articles, podcasts)
     return await llm.complete_json(_SYSTEM, user, WorksheetPayload)
 
 
