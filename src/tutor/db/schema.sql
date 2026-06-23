@@ -144,6 +144,15 @@ CREATE TABLE IF NOT EXISTS worksheet (
 );
 
 CREATE INDEX IF NOT EXISTS ix_worksheet_user ON worksheet (user_id, created_at);
+
+-- Per-channel scrape watermarks: track newest and oldest message IDs seen
+-- so each daily run picks up new posts and continues backfilling history.
+CREATE TABLE IF NOT EXISTS channel_watermark (
+    channel_ref    TEXT PRIMARY KEY,       -- str(channel_id)
+    max_scraped_id INTEGER NOT NULL DEFAULT 0,  -- newest message ID seen
+    min_scraped_id INTEGER,                -- oldest message ID seen (NULL = first run)
+    last_run_at    TEXT NOT NULL DEFAULT ''
+);
 CREATE TRIGGER IF NOT EXISTS trg_content_status_guard
 BEFORE UPDATE OF status ON content_item
 FOR EACH ROW

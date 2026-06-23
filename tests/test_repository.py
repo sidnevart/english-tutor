@@ -162,6 +162,34 @@ def test_get_quiz_auto_returns_reading_for_article(repo, sample_raw):
     assert quiz.kind == QuizKind.READING
 
 
+def test_channel_watermark_roundtrip(repo):
+    repo.set_watermark("1234567", max_id=1000, min_id=800)
+    wm = repo.get_watermark("1234567")
+    assert wm is not None
+    assert wm["max_scraped_id"] == 1000
+    assert wm["min_scraped_id"] == 800
+
+
+def test_channel_watermark_extends_range(repo):
+    repo.set_watermark("ch", max_id=500, min_id=400)
+    repo.set_watermark("ch", max_id=600, min_id=200)  # wider range
+    wm = repo.get_watermark("ch")
+    assert wm["max_scraped_id"] == 600  # always grows
+    assert wm["min_scraped_id"] == 200  # always shrinks
+
+
+def test_channel_watermark_never_shrinks(repo):
+    repo.set_watermark("ch2", max_id=1000, min_id=100)
+    repo.set_watermark("ch2", max_id=900, min_id=500)  # narrower range (stale run)
+    wm = repo.get_watermark("ch2")
+    assert wm["max_scraped_id"] == 1000  # kept the higher max
+    assert wm["min_scraped_id"] == 100  # kept the lower min
+
+
+def test_channel_watermark_returns_none_before_first_run(repo):
+    assert repo.get_watermark("never_seen") is None
+
+
 def test_get_quiz_auto_returns_listening_for_podcast(repo):
     raw = RawItem(
         source_type=SourceType.RSS,

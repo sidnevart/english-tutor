@@ -1,4 +1,4 @@
-"""Pure channel-message -> RawItem normalization."""
+"""Pure channel-message -> RawItem normalization and EPUB text extraction."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 from tutor.domain.enums import ContentType, SourceType
 from tutor.domain.models import RawItem
-from tutor.ingest.telegram_scraper import is_suitable, normalize
+from tutor.ingest.telegram_scraper import _epub_text, _epub_title, is_suitable, normalize
 
 
 def _raw(body: str) -> RawItem:
@@ -72,3 +72,42 @@ def test_normalize_falls_back_to_caption():
 
 def test_normalize_skips_empty_message():
     assert normalize(FakeMsg(id=1), 1137165265) is None
+
+
+# ---------------------------------------------------------------------------
+# EPUB text helpers
+# ---------------------------------------------------------------------------
+
+_XHTML_CHAPTER = b"""<?xml version="1.0"?>
+<html><body>
+<h2>Chapter One: The Beginning</h2>
+<p>It was the best of times, it was the worst of times. The long and winding
+road leads to meaningful discovery and understanding of the human condition.</p>
+<p>Another paragraph with more English text that makes this chapter long enough
+to be considered a real article worth reading and studying carefully.</p>
+</body></html>
+"""
+
+
+def test_epub_text_strips_html():
+    text = _epub_text(_XHTML_CHAPTER)
+    assert "<" not in text
+    assert "Chapter One" in text
+    assert "It was the best of times" in text
+
+
+def test_epub_text_collapses_whitespace():
+    text = _epub_text(_XHTML_CHAPTER)
+    assert "\n" not in text
+    assert "  " not in text
+
+
+def test_epub_title_extracts_h2():
+    title = _epub_title(_XHTML_CHAPTER, fallback="fallback")
+    assert title == "Chapter One: The Beginning"
+
+
+def test_epub_title_falls_back_when_no_heading():
+    html = b"<html><body><p>Just a paragraph, no heading here.</p></body></html>"
+    title = _epub_title(html, fallback="chapter01.xhtml")
+    assert title == "chapter01.xhtml"

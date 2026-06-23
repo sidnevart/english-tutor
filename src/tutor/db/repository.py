@@ -729,6 +729,38 @@ class Repository:
         ).fetchone()
         return int(row["c"])
 
+    # ---- channel watermarks ------------------------------------------------
+    def get_watermark(self, channel_ref: str) -> dict[str, object] | None:
+        """Return {max_scraped_id, min_scraped_id} for this channel, or None if never scraped."""
+        row = self.conn.execute(
+            "SELECT max_scraped_id, min_scraped_id FROM channel_watermark WHERE channel_ref = ?",
+            (channel_ref,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def set_watermark(self, channel_ref: str, max_id: int, min_id: int | None) -> None:
+        """Upsert watermark: always extend the range (never shrink max, never raise min)."""
+        existing = self.get_watermark(channel_ref)
+        if existing:
+            new_max = max(int(existing["max_scraped_id"]), max_id)
+            old_min = existing["min_scraped_id"]
+            if old_min is not None and min_id is not None:
+                new_min: int | None = min(int(old_min), min_id)
+            else:
+                new_min = min_id if min_id is not None else old_min
+        else:
+            new_max = max_id
+            new_min = min_id
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO channel_watermark
+                (channel_ref, max_scraped_id, min_scraped_id, last_run_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (channel_ref, new_max, new_min, _now()),
+        )
+        self.conn.commit()
+
     # ---- helpers -----------------------------------------------------------
     @staticmethod
     def _to_content(row: sqlite3.Row) -> ContentItem:

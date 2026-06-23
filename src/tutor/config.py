@@ -40,7 +40,9 @@ class Settings(BaseSettings):
     tg_session_path: str = "bot_data/telegram_e2e_session"
     scrape_channels: str = "1137165265,1356345589"
     min_article_len: int = 350  # drop blurbs/ads shorter than this when scraping
-    max_article_len: int = 4500  # ~700 words, TOEFL passage scale; skip longer articles
+    max_article_len: int = 4500  # ~700 words, TOEFL passage scale; truncated at delivery
+    scrape_daily_limit: int = 50  # new messages to check per channel per daily run
+    scrape_history_batch: int = 200  # historical messages to backfill per channel per run
     pdf_max_size_mb: int = 100  # max PDF size to download (MB)
     pdf_articles_per_issue: int = 10  # max articles to extract per PDF
 
