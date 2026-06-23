@@ -256,7 +256,9 @@ async def send_flashcards(svc: Services, user_id: int, content_id: int) -> int:
         text = (content.body_text or "").strip() if content else ""
         if not text:
             return 0
-        cards = await make_flashcards(svc.llm, text, limit=svc.settings.flashcards_per_item)
+        # flashcards_per_item == 0 means unlimited (exhaustive extraction).
+        limit = svc.settings.flashcards_per_item or None
+        cards = await make_flashcards(svc.llm, text, limit=limit)
         if not cards:
             return 0
         result = await svc.anki.add_cards(svc.settings.anki_deck, cards)
@@ -274,11 +276,52 @@ async def send_flashcards(svc: Services, user_id: int, content_id: int) -> int:
         return 0
 
 
+async def send_more_flashcards(svc: Services, user_id: int, content_id: int | None = None) -> int:
+    """Generate ADDITIONAL Anki cards for an item, skipping terms already carded.
+
+    Defaults to the learner's most recently delivered item. Returns cards sent.
+    """
+    try:
+        content = (
+            svc.repo.get(content_id)
+            if content_id is not None
+            else svc.repo.latest_delivered_content(user_id)
+        )
+        if content is None:
+            await svc.notifier.send(user_id, "No material yet — use /next first.")
+            return 0
+        if content.content_type == ContentType.PODCAST and not content.body_text.strip():
+            await ensure_transcript(svc, content.id)
+            content = svc.repo.get(content.id)
+        text = (content.body_text or "").strip() if content else ""
+        if not text:
+            return 0
+        exclude = svc.repo.anki_fronts_for_content(content.id)
+        cards = await make_flashcards(svc.llm, text, limit=None, exclude=exclude)
+        if not cards:
+            await svc.notifier.send(user_id, "No new cards to add — looks exhaustive already. 🎉")
+            return 0
+        result = await svc.anki.add_cards(svc.settings.anki_deck, cards)
+        svc.repo.save_anki_cards(content.id, cards, svc.settings.anki_deck, result.sink)
+        if result.apkg_path:
+            await svc.notifier.send_file(
+                user_id,
+                Path(result.apkg_path),
+                caption=f"🎴 {len(cards)} more cards from “{content.title or 'this item'}”",
+            )
+        return len(cards)
+    except Exception as exc:  # noqa: BLE001
+        svc.repo.log_job("flashcards_more", "error", str(exc)[:200])
+        return 0
+
+
 async def deliver_new(
     svc: Services, user_id: int, limit: int = 5, content_type: ContentType | None = None
 ) -> list[int]:
     """Push NEW items (optionally of one type) to the learner, mark DELIVERED,
     and immediately send the words+idioms Anki deck for each."""
+    from tutor.bot.keyboards import quiz_start
+
     max_len = svc.settings.max_article_len
     delivered: list[int] = []
     for item in svc.repo.fetch_by_status(user_id, DeliveryStatus.NEW, limit, content_type):
@@ -286,7 +329,7 @@ async def deliver_new(
         if item.content_type == ContentType.ARTICLE and len(item.body_text) > max_len:
             svc.repo.set_body_text(item.id, item.body_text[:max_len] + "…")
             item = svc.repo.get(item.id) or item
-        await svc.notifier.send(user_id, render_card(item))
+        await svc.notifier.send(user_id, render_card(item), quiz_start(item.id))
         svc.repo.mark_delivered(item.id)
         await send_flashcards(svc, user_id, item.id)
         delivered.append(item.id)
@@ -294,10 +337,18 @@ async def deliver_new(
 
 
 async def build_evaluation(
-    svc: Services, content_id: int, user_id: int, *, vocab_limit: int = 8, n_questions: int = 3
+    svc: Services,
+    content_id: int,
+    user_id: int,
+    *,
+    vocab_limit: int = 8,
+    n_questions: int | None = None,
 ) -> Quiz:
     """Select vocabulary (deterministic) and generate a reading quiz (LLM),
-    using the learner's persona + recall memory to shape the questions."""
+    using the learner's persona + recall memory to shape the questions.
+
+    `n_questions` defaults to the configured TOEFL set size (reading vs listening).
+    """
     content = svc.repo.get(content_id)
     if content is None:
         raise KeyError(f"content_item {content_id} not found")
@@ -312,13 +363,15 @@ async def build_evaluation(
 
     mem = Memory(svc.settings.soul_dir, user_id)
     if content.content_type == ContentType.PODCAST:
+        n = n_questions if n_questions is not None else svc.settings.listening_questions
         questions = await build_listening_quiz(
-            svc.llm, content, n=n_questions, system=mem.persona(), recall_hint=mem.recall_hint()
+            svc.llm, content, n=n, system=mem.persona(), recall_hint=mem.recall_hint()
         )
         svc.repo.save_quiz(content_id, QuizKind.LISTENING, questions)
     else:
+        n = n_questions if n_questions is not None else svc.settings.reading_questions
         questions = await build_reading_quiz(
-            svc.llm, content, n=n_questions, system=mem.persona(), recall_hint=mem.recall_hint()
+            svc.llm, content, n=n, system=mem.persona(), recall_hint=mem.recall_hint()
         )
         svc.repo.save_quiz(content_id, QuizKind.READING, questions)
 

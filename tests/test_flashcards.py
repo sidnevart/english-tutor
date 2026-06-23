@@ -61,3 +61,40 @@ async def test_llm_error_returns_empty():
             raise RuntimeError("boom")
 
     assert await make_flashcards(Boom(), TEXT, limit=8) == []
+
+
+async def test_exclude_skips_known_terms():
+    cards = [
+        Flashcard(term="ubiquitous", kind="word", definition="present everywhere"),
+        Flashcard(term="bite the bullet", kind="idiom", definition="face a hardship"),
+    ]
+    out = await make_flashcards(FakeLLM(cards), TEXT, exclude={"ubiquitous"})
+    fronts = [c.front for c in out]
+    assert "ubiquitous" not in fronts  # excluded as already-known
+    assert "bite the bullet" in fronts
+
+
+async def test_chunking_dedups_across_chunks_unlimited():
+    """A long text is chunked; the same in-text term from multiple chunks dedups once."""
+    # Build a >3000-char passage that contains the term in several chunks.
+    sentence = "The ubiquitous compound exhibits remarkable properties in every test. "
+    long_text = sentence * 80  # ~5600 chars -> 2 chunks
+    assert len(long_text) > 3000
+
+    class MultiChunkLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def complete(self, system, user):  # noqa: ANN001
+            return ""
+
+        async def complete_json(self, system, user, schema):  # noqa: ANN001
+            self.calls += 1
+            return FlashcardPayload(
+                cards=[Flashcard(term="ubiquitous", kind="word", definition="everywhere")]
+            )
+
+    llm = MultiChunkLLM()
+    out = await make_flashcards(llm, long_text, limit=None)
+    assert llm.calls >= 2  # multiple chunks were extracted in parallel
+    assert len(out) == 1  # but the repeated term is deduped to a single card

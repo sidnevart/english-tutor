@@ -23,6 +23,23 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
 
 
 def init_db(conn: sqlite3.Connection) -> None:
-    """Apply the schema (idempotent)."""
+    """Apply the schema (idempotent), then run lightweight column migrations."""
     conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
+    _migrate(conn)
     conn.commit()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after the original schema to pre-existing DBs.
+
+    SQLite has no ``ADD COLUMN IF NOT EXISTS``, so we check ``PRAGMA table_info``
+    first. Each migration is idempotent.
+    """
+    additions: list[tuple[str, str, str]] = [
+        # table, column, column definition
+        ("quiz_question", "correct_indices_json", "TEXT NOT NULL DEFAULT ''"),
+    ]
+    for table, column, definition in additions:
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")

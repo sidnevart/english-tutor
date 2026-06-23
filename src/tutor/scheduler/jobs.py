@@ -401,6 +401,13 @@ async def weekly_summary(svc: Services, user_id: int) -> None:
             f"• Items pending review: <b>{delivered}</b>",
         ]
 
+        writing = svc.repo.essay_scores(user_id)
+        if writing["count"]:
+            parts.append(f"• Writing avg: <b>{(writing['avg'] or 0.0):.1f}/5</b>")
+        speaking = svc.repo.speaking_scores(user_id)
+        if speaking["count"]:
+            parts.append(f"• Speaking avg: <b>{(speaking['avg'] or 0.0):.1f}/4</b>")
+
         if weak:
             parts.append("\n<b>📉 Focus areas (weakest topics):</b>")
             for t in weak:
@@ -422,6 +429,7 @@ async def weekly_summary(svc: Services, user_id: int) -> None:
             "\n<b>💡 Recommendations:</b>\n"
             "  • Use /review for targeted grammar &amp; vocabulary practice\n"
             "  • Use /write for TOEFL essay practice\n"
+            "  • Use /speaking for timed, scored TOEFL Speaking tasks\n"
             "  • Use /coach for an adaptive learning session"
         )
 

@@ -52,9 +52,13 @@ _SYSTEM = (
     "   The correct answer preserves ALL essential meaning. Distractors: omit "
     "   a key idea, reverse a relationship, or add unsupported information.\n\n"
     '7. summary — "An introductory sentence for a brief summary of the passage '
-    '   is provided. Complete the summary by selecting 3 key ideas."\n'
-    '   Simulated as: "Which 3 of the following statements best summarize the '
-    '   passage?" with 6 options, 3 correct.\n\n'
+    '   is provided. Complete the summary by selecting the 3 key ideas."\n'
+    '   This is a MULTI-SELECT question: provide exactly 6 options and set '
+    '   "correct_indices" to the THREE 0-based indices that best summarize the '
+    "   passage (major ideas, not minor details). The 3 wrong options state minor "
+    "   details, are not mentioned, or contradict the passage. For this type set "
+    '   "correct_index" to any one of the correct indices (it is ignored when '
+    '   "correct_indices" is present).\n\n'
     "DISTRACTOR CONSTRUCTION RULES:\n"
     "- NEVER make distractors obviously absurd, off-topic, or comically wrong.\n"
     "- Each distractor must exploit a specific misreading:\n"
@@ -88,11 +92,45 @@ def _user_prompt(passage: str, n: int, recall_hint: str = "") -> str:
         )
     else:
         base += (
-            "- Include at least 1 vocab, 1 inference, 1 factual, 1 rhetorical.\n"
-            "- Remaining can be negative_factual, simplification, or summary.\n"
+            "- Include at least 1 vocab, 1 inference, 1 factual, 1 rhetorical, "
+            "1 negative_factual, 1 simplification.\n"
+            "- Include EXACTLY 1 summary question (multi-select, 6 options, "
+            "3 correct via correct_indices) as the LAST question.\n"
+            "- Fill any remaining slots with more factual/inference/vocab questions.\n"
         )
     base += f"\nPASSAGE:\n{passage}"
     return f"{base}\n\n{recall_hint}" if recall_hint else base
+
+
+def _to_question(q: object) -> QuizQuestion | None:
+    """Validate a payload question and convert it to a domain QuizQuestion.
+
+    Drops anything ungradeable: a single-select with an out-of-range key, or a
+    multi-select whose `correct_indices` are empty or out of range.
+    """
+    n_opts = len(q.options)  # type: ignore[attr-defined]
+    raw_multi = list(getattr(q, "correct_indices", []) or [])
+    multi = sorted({i for i in raw_multi if 0 <= i < n_opts})
+    if raw_multi:  # intended as multi-select
+        if len(multi) < 2:
+            return None
+        return QuizQuestion(
+            prompt=q.prompt,  # type: ignore[attr-defined]
+            options=q.options,  # type: ignore[attr-defined]
+            correct_index=multi[0],
+            correct_indices=multi,
+            explanation=q.explanation,  # type: ignore[attr-defined]
+            question_type=getattr(q, "question_type", ""),
+        )
+    if 0 <= q.correct_index < n_opts:  # type: ignore[attr-defined]
+        return QuizQuestion(
+            prompt=q.prompt,  # type: ignore[attr-defined]
+            options=q.options,  # type: ignore[attr-defined]
+            correct_index=q.correct_index,  # type: ignore[attr-defined]
+            explanation=q.explanation,  # type: ignore[attr-defined]
+            question_type=getattr(q, "question_type", ""),
+        )
+    return None
 
 
 async def build_reading_quiz(
@@ -108,16 +146,9 @@ async def build_reading_quiz(
     )
     questions: list[QuizQuestion] = []
     for q in payload.questions:
-        if 0 <= q.correct_index < len(q.options):
-            questions.append(
-                QuizQuestion(
-                    prompt=q.prompt,
-                    options=q.options,
-                    correct_index=q.correct_index,
-                    explanation=q.explanation,
-                    question_type=q.question_type if hasattr(q, "question_type") else "",
-                )
-            )
+        converted = _to_question(q)
+        if converted is not None:
+            questions.append(converted)
     return questions
 
 
@@ -175,14 +206,7 @@ async def build_listening_quiz(
     )
     questions: list[QuizQuestion] = []
     for q in payload.questions:
-        if 0 <= q.correct_index < len(q.options):
-            questions.append(
-                QuizQuestion(
-                    prompt=q.prompt,
-                    options=q.options,
-                    correct_index=q.correct_index,
-                    explanation=q.explanation,
-                    question_type=q.question_type if hasattr(q, "question_type") else "",
-                )
-            )
+        converted = _to_question(q)
+        if converted is not None:
+            questions.append(converted)
     return questions
