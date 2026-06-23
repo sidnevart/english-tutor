@@ -118,6 +118,7 @@ async def run_ingest(
     """Ingest the latest episode(s) of every podcast due today. Returns
     per-podcast counts of newly stored episodes."""
     max_seg_sec = settings.max_podcast_segment_min * 60
+    max_ingest_sec = settings.max_ingest_duration_min * 60
     counts: dict[str, int] = {}
     for podcast in due_today(_weekday(settings)):
         parsed = feedparser.parse(podcast.feed_url)
@@ -125,6 +126,9 @@ async def run_ingest(
         for entry in (parsed.entries or [])[:limit_per_feed]:
             raw = normalize_entry(entry, podcast)
             if raw is None:
+                continue
+            # Skip episodes that exceed the ingest duration cap (unknown duration passes).
+            if raw.duration_sec and raw.duration_sec > max_ingest_sec:
                 continue
             for segment in _split_segments(raw, max_seg_sec):
                 if repo.add_content(segment, settings.admin_user_id) is not None:

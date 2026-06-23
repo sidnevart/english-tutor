@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     stt_model: str = ""  # blank -> whisper-large-v3 (Groq) or whisper-1 (OpenAI)
     stt_max_seconds: int = 1800  # transcribe only the first N seconds (cost/size cap)
     max_podcast_segment_min: int = 25  # split episodes longer than this into daily segments
+    max_ingest_duration_min: int = 60  # skip episodes longer than this at ingest time
     tts_model: str = ""  # blank -> canopylabs/orpheus-v1-english (Groq)
     tts_voice: str = "troy"  # Groq Orpheus voice (troy | hannah | austin | ...)
 
