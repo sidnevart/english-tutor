@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tutor.domain.enums import ContentType, DeliveryStatus, QuizKind
-from tutor.domain.models import AnkiResult, Quiz
+from tutor.domain.models import AnkiResult, ContentItem, Quiz
 from tutor.eval.anki_cards import build_cards
 from tutor.eval.flashcards import make_flashcards
 from tutor.eval.grader import is_correct
@@ -315,23 +315,53 @@ async def send_more_flashcards(svc: Services, user_id: int, content_id: int | No
         return 0
 
 
+async def send_task_file(svc: Services, user_id: int, item: ContentItem) -> bool:
+    """Generate a TOEFL quiz for one item, save to DB, render to .md, send file.
+
+    Resilient: failures are logged and never block the delivery flow.
+    Returns True if the file was sent.
+    """
+    import tempfile
+
+    from tutor.worksheet.renderer import render_task_md
+
+    try:
+        quiz = await build_evaluation(svc, item.id, user_id)
+        md = render_task_md(item, quiz)
+        kind = "listening" if item.content_type == ContentType.PODCAST else "reading"
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".md",
+            prefix=f"task_{kind}_{item.id}_",
+            delete=False,
+            encoding="utf-8",
+        ) as f:
+            f.write(md)
+            tmp = Path(f.name)
+        caption = f"📝 Your TOEFL {kind} task — fill in and send back"
+        await svc.notifier.send_file(user_id, tmp, caption=caption)
+        tmp.unlink(missing_ok=True)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        svc.repo.log_job("task_file", "error", str(exc)[:200])
+        return False
+
+
 async def deliver_new(
     svc: Services, user_id: int, limit: int = 5, content_type: ContentType | None = None
 ) -> list[int]:
     """Push NEW items (optionally of one type) to the learner, mark DELIVERED,
-    and immediately send the words+idioms Anki deck for each."""
-    from tutor.bot.keyboards import quiz_start
-
+    send the words+idioms Anki deck, and immediately attach a TOEFL task file."""
     max_len = svc.settings.max_article_len
     delivered: list[int] = []
     for item in svc.repo.fetch_by_status(user_id, DeliveryStatus.NEW, limit, content_type):
-        # Truncate overly long articles to TOEFL scale.
         if item.content_type == ContentType.ARTICLE and len(item.body_text) > max_len:
             svc.repo.set_body_text(item.id, item.body_text[:max_len] + "…")
             item = svc.repo.get(item.id) or item
-        await svc.notifier.send(user_id, render_card(item), quiz_start(item.id))
+        await svc.notifier.send(user_id, render_card(item))
         svc.repo.mark_delivered(item.id)
         await send_flashcards(svc, user_id, item.id)
+        await send_task_file(svc, user_id, item)
         delivered.append(item.id)
     return delivered
 

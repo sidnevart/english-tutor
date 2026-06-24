@@ -114,6 +114,33 @@ HELP_TEXT = (
 )
 
 
+async def _grade_task_file(svc: Services, message: Message, content_id: int, text: str) -> None:
+    """Grade a per-item TOEFL task file submitted by the learner."""
+    from tutor.pipeline import submit_answers
+    from tutor.worksheet.parser import normalize_letter, parse_fill_blanks
+
+    user_id = message.from_user.id
+    quiz = svc.repo.get_quiz_auto(content_id)
+    if quiz is None:
+        await message.answer("⚠️ Quiz not found for this task — it may have already been reviewed.")
+        return
+
+    letter_answers = parse_fill_blanks(text)
+    answers: dict[int, int] = {}
+    for i, q in enumerate(quiz.questions):
+        letter = letter_answers[i] if i < len(letter_answers) else ""
+        idx = normalize_letter(letter)
+        answers[q.id] = idx if idx is not None else -1
+
+    content = svc.repo.get(content_id)
+    title = (content.title or "this task") if content else "this task"
+    await message.answer(f"📝 Grading your task: <b>{title}</b>…")
+    try:
+        await submit_answers(svc, content_id, user_id, answers)
+    except Exception as exc:  # noqa: BLE001
+        await message.answer(f"Error grading: {str(exc)[:120]}")
+
+
 async def _coach_reply(svc: Services, user_id: int, utterance: str) -> str:
     mem = Memory(svc.settings.soul_dir, user_id)
     ctx = build_learner_context(svc.repo, user_id, svc.settings.soul_dir)
@@ -452,13 +479,11 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         else:
             await svc.notifier.send(cb.from_user.id, "Reset cancelled. Your progress is safe. 👍")
 
-    # ---- document submission (worksheet answers) ----
+    # ---- document submission (task file or worksheet answers) ----
     @router.message(F.document)
     async def on_document(message: Message) -> None:
-        """Handle worksheet file submission: parse answers and grade."""
-        from tutor.worksheet.generator import worksheet_from_json
-        from tutor.worksheet.grader import grade_worksheet
-        from tutor.worksheet.parser import parse_worksheet_answers
+        """Handle a submitted .md file: route to task grader or worksheet grader."""
+        import re
 
         user = message.from_user.id
         doc = message.document
@@ -467,10 +492,9 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
 
         fname = doc.file_name or ""
         if not fname.endswith((".md", ".txt")):
-            await message.answer("Please send a .md or .txt file with your worksheet answers.")
+            await message.answer("Please send a .md or .txt file with your answers.")
             return
 
-        # Download the file.
         if bot is None:
             await message.answer("Cannot process files right now.")
             return
@@ -478,10 +502,19 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         file_bytes = await bot.download_file(tg_file.file_path)
         text = file_bytes.decode("utf-8", errors="replace")
 
-        # Find the latest pending worksheet.
+        # Route: per-item task file vs daily worksheet.
+        task_match = re.search(r"<!--\s*TASK_ID:\s*(\d+)\s*-->", text)
+        if task_match:
+            await _grade_task_file(svc, message, int(task_match.group(1)), text)
+            return
+
+        # Daily worksheet flow.
+        from tutor.worksheet.generator import worksheet_from_json
+        from tutor.worksheet.grader import grade_worksheet
+        from tutor.worksheet.parser import parse_worksheet_answers
+
         worksheet = svc.repo.get_latest_worksheet(user, status="pending")
         if worksheet is None:
-            # Also check submitted (re-grade scenario).
             worksheet = svc.repo.get_latest_worksheet(user, status="submitted")
         if worksheet is None:
             await message.answer(
@@ -490,14 +523,11 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
             )
             return
 
-        # Parse and grade.
         answers = parse_worksheet_answers(text)
         svc.repo.update_worksheet_answers(worksheet["id"], text)
-
         payload = worksheet_from_json(worksheet["items_json"])
         score, feedback = await grade_worksheet(svc.llm, payload, answers)
         svc.repo.update_worksheet_grade(worksheet["id"], score, feedback)
-
         await message.answer(feedback)
 
     # ---- in-session messages (registered last so commands win) ----
