@@ -9,6 +9,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+from tutor.domain.enums import ContentType
+from tutor.domain.models import ContentItem, Quiz
 from tutor.worksheet.generator import WorksheetPayload
 
 _LETTERS = "ABCD"
@@ -118,6 +120,54 @@ def render_worksheet_md(payload: WorksheetPayload, date: str = "") -> str:
     parts.append("- Difficulty (1-5): ____")
     parts.append("- Notes: _________________________________\n")
 
+    return "\n".join(parts)
+
+
+def render_task_md(item: ContentItem, quiz: Quiz) -> str:
+    """Render a per-item TOEFL task file the learner fills in and sends back.
+
+    Embeds ``<!-- TASK_ID: {id} -->`` so the grader can link submissions to
+    the correct quiz without the user having to do anything.
+    """
+    is_podcast = item.content_type == ContentType.PODCAST
+    kind = "Listening" if is_podcast else "Reading"
+    emoji = "🎧" if is_podcast else "📰"
+
+    parts: list[str] = [
+        f"# {emoji} TOEFL {kind} Task",
+        f"<!-- TASK_ID: {item.id} -->",
+        "",
+        f"**{item.title or 'Untitled'}**",
+        "",
+        "## Instructions",
+        "",
+    ]
+    if is_podcast:
+        parts.append("Listen to the episode, then answer the questions below.")
+    else:
+        parts.append("Read the article, then answer the questions below.")
+    parts += [
+        "Fill in each **Your answer:** line with the correct letter (A, B, C, or D).",
+        "When you are done, send this file back to the bot for grading.",
+        "",
+        "---",
+        "",
+        f"## Questions ({len(quiz.questions)} total)",
+        "",
+    ]
+
+    for i, q in enumerate(quiz.questions, 1):
+        parts.append(f"**{i}.** {q.prompt}")
+        opts = "  ".join(f"{_LETTERS[j]}) {opt}" for j, opt in enumerate(q.options))
+        parts.append(f"   {opts}")
+        parts.append("   **Your answer:** ____")
+        parts.append("")
+
+    parts += [
+        "---",
+        "",
+        "*Fill in your answers above and send this file back to your TOEFL coach bot.*",
+    ]
     return "\n".join(parts)
 
 
