@@ -7,7 +7,14 @@ from datetime import UTC, datetime
 
 from tutor.domain.enums import ContentType, SourceType
 from tutor.domain.models import RawItem
-from tutor.ingest.telegram_scraper import _epub_text, _epub_title, is_suitable, normalize
+from tutor.ingest.telegram_scraper import (
+    _announcement_ids,
+    _epub_text,
+    _epub_title,
+    _fb2_sections,
+    is_suitable,
+    normalize,
+)
 
 
 def _raw(body: str) -> RawItem:
@@ -111,3 +118,97 @@ def test_epub_title_falls_back_when_no_heading():
     html = b"<html><body><p>Just a paragraph, no heading here.</p></body></html>"
     title = _epub_title(html, fallback="chapter01.xhtml")
     assert title == "chapter01.xhtml"
+
+
+# ---------------------------------------------------------------------------
+# Announcement ↔ file pairing
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _Doc:
+    mime_type: str = "application/pdf"
+    size: int = 1_000_000
+
+
+@dataclass
+class _Media:
+    document: _Doc | None = None
+
+
+@dataclass
+class FileMsg:
+    """A message carrying a file attachment (no standalone article text)."""
+
+    id: int
+    media: _Media = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.media is None:
+            self.media = _Media(document=_Doc())
+
+
+def test_announcement_before_file_is_dropped():
+    # Book channel pattern: text blurb (9621) then file (9622).
+    by_id = {
+        9621: FakeMsg(id=9621, text="The Memory Activity Book\nA short blurb."),
+        9622: FileMsg(id=9622),
+    }
+    consumed = _announcement_ids(by_id)
+    assert 9621 in consumed  # the blurb is paired with the file and skipped
+
+
+def test_announcement_after_file_is_dropped():
+    by_id = {
+        100: FileMsg(id=100),
+        101: FakeMsg(id=101, text="Description posted after the file."),
+    }
+    assert 101 in _announcement_ids(by_id)
+
+
+def test_standalone_text_is_not_consumed():
+    # A text post with no adjacent file stays a candidate article.
+    by_id = {
+        50: FakeMsg(id=50, text="A genuine standalone article with real content."),
+    }
+    assert _announcement_ids(by_id) == set()
+
+
+def test_file_without_adjacent_text_consumes_nothing():
+    by_id = {200: FileMsg(id=200)}
+    assert _announcement_ids(by_id) == set()
+
+
+# ---------------------------------------------------------------------------
+# FB2 extraction
+# ---------------------------------------------------------------------------
+
+_FB2 = b"""<?xml version="1.0" encoding="utf-8"?>
+<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">
+<body>
+<section>
+<title><p>Chapter One</p></title>
+<p>It was a bright cold day in April, and the clocks were striking thirteen.
+The hallway smelt of boiled cabbage and old rag mats, a passage long enough
+to be considered a real chapter worth reading and studying carefully.</p>
+</section>
+<section>
+<title><p>Short</p></title>
+<p>Too short.</p>
+</section>
+</body>
+</FictionBook>
+"""
+
+
+def test_fb2_sections_extracts_title_and_text():
+    sections = _fb2_sections(_FB2)
+    assert len(sections) == 2
+    title, text = sections[0]
+    assert title == "Chapter One"
+    assert "bright cold day in April" in text
+    assert "<" not in text
+
+
+def test_fb2_sections_handles_malformed_xml():
+    assert _fb2_sections(b"not xml at all <<<") == []

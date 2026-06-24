@@ -121,6 +121,16 @@ def _file_size_mb(msg: Any) -> float:
     return (doc.size or 0) / 1024 / 1024 if doc else 0.0
 
 
+def _has_document(msg: Any) -> bool:
+    """True if the message carries any file attachment (PDF, EPUB, FB2, …)."""
+    return getattr(getattr(msg, "media", None), "document", None) is not None
+
+
+def _doc_mime(msg: Any) -> str:
+    doc = getattr(getattr(msg, "media", None), "document", None)
+    return getattr(doc, "mime_type", "") if doc else ""
+
+
 def _pdf_to_rawitem(
     article: Any,  # pdf_parser.Article
     channel_id: int,
@@ -239,8 +249,122 @@ async def _handle_epub(
 
 
 # ---------------------------------------------------------------------------
+# FB2 helpers (FictionBook is a single XML file — stdlib only, no deps)
+# ---------------------------------------------------------------------------
+
+_FB2_MIME = "application/x-fictionbook+xml"
+
+
+def _is_fb2(msg: Any) -> bool:
+    if _doc_mime(msg) == _FB2_MIME:
+        return True
+    return _has_document(msg) and _pdf_filename(msg).lower().endswith(".fb2")
+
+
+def _fb2_local(tag: str) -> str:
+    """Strip an XML namespace from a tag name (``{ns}body`` -> ``body``)."""
+    return tag.rsplit("}", 1)[-1]
+
+
+def _fb2_sections(raw_xml: bytes) -> list[tuple[str, str]]:
+    """Return (title, text) for each top-level <section> of the main FB2 body.
+
+    Only the first <body> is used (later bodies hold footnotes/endnotes).
+    """
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.fromstring(raw_xml)
+    except ET.ParseError:
+        return []
+
+    sections: list[tuple[str, str]] = []
+    for body in (el for el in root.iter() if _fb2_local(el.tag) == "body"):
+        for section in (c for c in body if _fb2_local(c.tag) == "section"):
+            title = ""
+            title_el = next((c for c in section if _fb2_local(c.tag) == "title"), None)
+            if title_el is not None:
+                title = " ".join(t.strip() for t in title_el.itertext() if t.strip())
+            text = re.sub(
+                r"\s+", " ", " ".join(t.strip() for t in section.itertext() if t.strip())
+            ).strip()
+            sections.append((title[:120], text))
+        break  # main body only
+    return sections
+
+
+async def _handle_fb2(
+    client: Any,
+    msg: Any,
+    channel_id: int,
+    settings: Settings,
+) -> list[RawItem]:
+    if _file_size_mb(msg) > settings.pdf_max_size_mb:
+        return []
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "book.fb2"
+        await client.download_media(msg, file=str(path))
+        if not path.exists() or path.stat().st_size == 0:
+            return []
+
+        items: list[RawItem] = []
+        short = _short_id(channel_id)
+        for i, (title, text) in enumerate(
+            _fb2_sections(path.read_bytes())[: settings.pdf_articles_per_issue]
+        ):
+            if len(text) < settings.min_article_len:
+                continue
+            items.append(
+                RawItem(
+                    source_type=SourceType.CHANNEL,
+                    source_ref=str(channel_id),
+                    external_id=f"{msg.id}_fb2_{i}",
+                    content_type=ContentType.ARTICLE,
+                    title=title or f"Section {i + 1}",
+                    url=f"https://t.me/c/{short}/{msg.id}",
+                    body_text=text,
+                )
+            )
+        return items
+
+
+# ---------------------------------------------------------------------------
 # Channel scraping with watermarks
 # ---------------------------------------------------------------------------
+
+
+def _is_text_only(msg: Any) -> bool:
+    """True if the message has text but no file attachment (an announcement/post)."""
+    if _has_document(msg):
+        return False
+    body = (
+        getattr(msg, "message", None)
+        or getattr(msg, "text", None)
+        or getattr(msg, "caption", None)
+        or ""
+    ).strip()
+    return bool(body)
+
+
+def _announcement_ids(by_id: dict[int, Any]) -> set[int]:
+    """Ids of text-only messages that merely announce an adjacent file.
+
+    Book/magazine channels post a short description (msg N) followed by the
+    actual file (msg N+1). Those descriptions are not real articles, so we drop
+    them. Channel message ids are sequential, so the announcement sits at N-1
+    (preferred) or N+1 relative to the file.
+    """
+    consumed: set[int] = set()
+    for mid, msg in by_id.items():
+        if not _has_document(msg):
+            continue
+        for adj in (mid - 1, mid + 1):
+            adj_msg = by_id.get(adj)
+            if adj_msg is not None and adj not in consumed and _is_text_only(adj_msg):
+                consumed.add(adj)
+                break
+    return consumed
 
 
 async def scrape_channel(
@@ -250,63 +374,74 @@ async def scrape_channel(
     repo: Repository,
     llm: Any = None,
 ) -> list[RawItem]:
-    """Scrape one channel using a two-phase watermark strategy.
+    """Scrape one channel using a two-phase watermark strategy, then pair
+    announcement posts with their files so blurbs are never stored as articles.
 
-    Phase 1 — new messages since the last run (id > max_scraped_id).
-    Phase 2 — historical backfill: `scrape_history_batch` messages going
-               backwards from the oldest message ever seen (id < min_scraped_id).
+    Watermark phases (collect):
+      Phase 1 — new messages since the last run (id > max_scraped_id).
+      Phase 2 — historical backfill going backwards from the oldest seen id.
+      First run — the most recent `scrape_history_batch` messages.
 
-    First run: fetches the most recent `scrape_history_batch` messages and
-    sets both watermarks from the result (no separate phase 2 needed).
+    Parse pass:
+      Documents (PDF/EPUB/FB2) are downloaded and parsed into real articles; the
+      adjacent announcement text is consumed (skipped). Unsupported file formats
+      are logged and skipped, but their announcement is still consumed so no fake
+      "~1 min read" blurb is left behind. Genuinely standalone text posts (no
+      adjacent file) keep the normal `normalize` + `is_suitable` behavior.
     """
     channel_ref = str(channel_id)
     marked = _marked_id(channel_id)
     wm = repo.get_watermark(channel_ref)
 
-    items: list[RawItem] = []
-    msg_ids: list[int] = []
+    # --- Collect messages into a map so we can look at neighbors. ---
+    by_id: dict[int, Any] = {}
 
-    async def _process(msg: Any) -> None:
+    async def _collect(msg: Any) -> None:
         mid = getattr(msg, "id", None)
         if mid is not None:
-            msg_ids.append(int(mid))
-        if _is_pdf(msg) and llm is not None:
-            items.extend(await _handle_pdf(client, msg, channel_id, settings, llm))
-        elif _is_epub(msg):
-            items.extend(await _handle_epub(client, msg, channel_id, settings))
-        else:
-            raw = normalize(msg, channel_id)
-            if raw and is_suitable(
-                raw,
-                min_len=settings.min_article_len,
-                max_len=settings.max_article_len,
-            ):
-                items.append(raw)
+            by_id[int(mid)] = msg
 
     if wm is None:
-        # First run — grab the most recent `scrape_history_batch` messages.
         async for msg in client.iter_messages(marked, limit=settings.scrape_history_batch):
-            await _process(msg)
+            await _collect(msg)
     else:
-        # Phase 1: new messages since last run (Telethon min_id is exclusive).
         async for msg in client.iter_messages(
             marked, min_id=int(wm["max_scraped_id"]), limit=settings.scrape_daily_limit
         ):
-            await _process(msg)
-
-        # Phase 2: historical backfill going backwards from the oldest known message.
+            await _collect(msg)
         min_seen = wm["min_scraped_id"]
         if min_seen is not None:
             async for msg in client.iter_messages(
-                marked,
-                offset_id=int(min_seen),
-                limit=settings.scrape_history_batch,
+                marked, offset_id=int(min_seen), limit=settings.scrape_history_batch
             ):
-                await _process(msg)
+                await _collect(msg)
+
+    # --- Pair announcements with files, then parse. ---
+    announcements = _announcement_ids(by_id)
+    items: list[RawItem] = []
+    for mid in sorted(by_id):
+        msg = by_id[mid]
+        if _has_document(msg):
+            if _is_pdf(msg) and llm is not None:
+                items.extend(await _handle_pdf(client, msg, channel_id, settings, llm))
+            elif _is_epub(msg):
+                items.extend(await _handle_epub(client, msg, channel_id, settings))
+            elif _is_fb2(msg):
+                items.extend(await _handle_fb2(client, msg, channel_id, settings))
+            else:
+                repo.log_job("scrape_skip", "ok", f"{_doc_mime(msg) or 'unknown'} msg {mid}")
+        elif mid in announcements:
+            continue  # announcement blurb — its file carries the real content
+        else:
+            raw = normalize(msg, channel_id)
+            if raw and is_suitable(
+                raw, min_len=settings.min_article_len, max_len=settings.max_article_len
+            ):
+                items.append(raw)
 
     # Persist watermarks so the next run knows where we are.
-    if msg_ids:
-        repo.set_watermark(channel_ref, max(msg_ids), min(msg_ids))
+    if by_id:
+        repo.set_watermark(channel_ref, max(by_id), min(by_id))
 
     return items
 

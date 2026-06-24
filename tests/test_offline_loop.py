@@ -11,7 +11,7 @@ from tutor.app import open_services
 from tutor.config import Settings
 from tutor.domain.enums import ContentType, DeliveryStatus, SourceType
 from tutor.domain.models import RawItem
-from tutor.pipeline import build_evaluation, deliver_new, submit_answers
+from tutor.pipeline import deliver_new, submit_answers
 
 ARTICLE = (
     "Researchers describe a serendipitous discovery: an ephemeral compound "
@@ -50,17 +50,21 @@ async def test_full_loop_offline(tmp_path):
         )
         assert cid is not None
 
-        # 1) Morning delivery
+        # 1) Morning delivery: card (no quiz button) + Anki deck + task file
         delivered = await deliver_new(svc, user, limit=5)
         assert delivered == [cid]
         assert svc.repo.get(cid).status == DeliveryStatus.DELIVERED
         notifier: StubNotifier = svc.notifier  # type: ignore[assignment]
         assert len(notifier.messages) == 1
-        # Delivered items carry an inline "Start quiz" button.
-        assert notifier.messages[0].keyboard == [[("📖 Start quiz", f"quiz:start:{cid}")]]
+        # No inline quiz button — task file is sent as attachment instead.
+        assert notifier.messages[0].keyboard is None
+        # Task file (.md) is sent right after delivery.
+        task_files = [f for f in notifier.files if f.caption and "task" in f.caption]
+        assert len(task_files) == 1
 
-        # 2) Evening evaluation (vocab deterministic + quiz via stub LLM)
-        quiz = await build_evaluation(svc, cid, user)
+        # 2) The quiz was already built by deliver_new; load it (idempotent re-build is ok).
+        quiz = svc.repo.get_quiz_auto(cid)
+        assert quiz is not None
         assert len(quiz.questions) == 3
         assert len(svc.repo.get_vocab(cid)) > 0
 
@@ -79,8 +83,9 @@ async def test_full_loop_offline(tmp_path):
         from pathlib import Path
 
         assert Path(result.anki.apkg_path).exists()
-        assert len(notifier.files) == 1
-        assert notifier.files[0].caption.startswith("🎴")
+        # files: task_md (from deliver_new) + missed_cards .apkg (from finalize_review)
+        anki_files = [f for f in notifier.files if f.caption and f.caption.startswith("🎴")]
+        assert len(anki_files) >= 1
 
         # attempts persisted: exactly one wrong
         attempts = svc.repo.attempts_for_content(cid, user)

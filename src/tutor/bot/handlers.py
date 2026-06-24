@@ -1,8 +1,9 @@
-"""aiogram handlers: content delivery, on-demand quiz, and conversation practice.
+"""aiogram handlers: content delivery, task-file grading, and conversation practice.
 
-Quiz progress is DB-derived (restart-safe). Speaking/discussion run as multi-turn
-FSM sessions via `tutor.bot.conversation`. Handler order matters: commands and
-callbacks are registered before the catch-all in-session message handlers.
+Each delivered item comes with a TOEFL task file; the learner fills it in and sends
+it back, and `on_document` grades it. Speaking/discussion run as multi-turn FSM
+sessions via `tutor.bot.conversation`. Handler order matters: commands and callbacks
+are registered before the catch-all in-session message handlers.
 """
 
 from __future__ import annotations
@@ -26,7 +27,6 @@ from tutor.bot.conversation import (
     submit_essay,
 )
 from tutor.bot.keyboards import reset_confirm, speaking_menu
-from tutor.bot.quiz import QuizState, handle_option, handle_submit, start_quiz
 from tutor.bot.speaking import (
     SpeakingState,
     cancel_speaking,
@@ -61,7 +61,7 @@ _ANTI_INJECTION = (
 # Terse one-liners for the Telegram slash menu (set_my_commands). Telegram caps
 # these and shows one per line, so the human-readable detail lives in HELP_TEXT.
 COMMANDS: list[tuple[str, str]] = [
-    ("start", "Today's material + quiz"),
+    ("start", "Today's material + task file"),
     ("next", "Next reading or episode"),
     ("refresh", "Fetch new articles and podcasts now"),
     ("speak", "Speaking practice (voice)"),
@@ -114,6 +114,33 @@ HELP_TEXT = (
 )
 
 
+async def _grade_task_file(svc: Services, message: Message, content_id: int, text: str) -> None:
+    """Grade a per-item TOEFL task file submitted by the learner."""
+    from tutor.pipeline import submit_answers
+    from tutor.worksheet.parser import normalize_letter, parse_fill_blanks
+
+    user_id = message.from_user.id
+    quiz = svc.repo.get_quiz_auto(content_id)
+    if quiz is None:
+        await message.answer("⚠️ Quiz not found for this task — it may have already been reviewed.")
+        return
+
+    letter_answers = parse_fill_blanks(text)
+    answers: dict[int, int] = {}
+    for i, q in enumerate(quiz.questions):
+        letter = letter_answers[i] if i < len(letter_answers) else ""
+        idx = normalize_letter(letter)
+        answers[q.id] = idx if idx is not None else -1
+
+    content = svc.repo.get(content_id)
+    title = (content.title or "this task") if content else "this task"
+    await message.answer(f"📝 Grading your task: <b>{title}</b>…")
+    try:
+        await submit_answers(svc, content_id, user_id, answers)
+    except Exception as exc:  # noqa: BLE001
+        await message.answer(f"Error grading: {str(exc)[:120]}")
+
+
 async def _coach_reply(svc: Services, user_id: int, utterance: str) -> str:
     mem = Memory(svc.settings.soul_dir, user_id)
     ctx = build_learner_context(svc.repo, user_id, svc.settings.soul_dir)
@@ -136,7 +163,8 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         await message.answer(
             "👋 <b>TOEFL coach</b>\n"
             "• today's readings/episodes come with an Anki deck (words & idioms)\n"
-            "• tap &quot;📖 Start quiz&quot; under an item for a TOEFL comprehension quiz\n"
+            "• each item arrives with a TOEFL task file — fill it in and send it "
+            "back to get graded\n"
             "• /speak for speaking practice · /progress for your stats"
         )
         if not await deliver_new(svc, user, limit=1):
@@ -414,22 +442,6 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         await cb.answer()
         await start_speaking(svc, bot, cb.from_user.id, state)
 
-    @router.callback_query(F.data.startswith("quiz:start:"))
-    async def on_quiz_start(cb: CallbackQuery, state: FSMContext) -> None:
-        await cb.answer()
-        content_id = int(cb.data.split(":")[2])
-        await start_quiz(svc, bot, cb.from_user.id, state, content_id)
-
-    @router.callback_query(QuizState.active, F.data.startswith("quiz:opt:"))
-    async def on_quiz_opt(cb: CallbackQuery, state: FSMContext) -> None:
-        await cb.answer()
-        await handle_option(svc, bot, cb.from_user.id, state, int(cb.data.split(":")[2]))
-
-    @router.callback_query(QuizState.active, F.data == "quiz:submit")
-    async def on_quiz_submit(cb: CallbackQuery, state: FSMContext) -> None:
-        await cb.answer()
-        await handle_submit(svc, bot, cb.from_user.id, state)
-
     @router.callback_query(F.data.startswith("spk:task:"))
     async def on_speaking_task(cb: CallbackQuery, state: FSMContext) -> None:
         await cb.answer()
@@ -452,13 +464,11 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         else:
             await svc.notifier.send(cb.from_user.id, "Reset cancelled. Your progress is safe. 👍")
 
-    # ---- document submission (worksheet answers) ----
+    # ---- document submission (task file or worksheet answers) ----
     @router.message(F.document)
     async def on_document(message: Message) -> None:
-        """Handle worksheet file submission: parse answers and grade."""
-        from tutor.worksheet.generator import worksheet_from_json
-        from tutor.worksheet.grader import grade_worksheet
-        from tutor.worksheet.parser import parse_worksheet_answers
+        """Handle a submitted .md file: route to task grader or worksheet grader."""
+        import re
 
         user = message.from_user.id
         doc = message.document
@@ -467,10 +477,9 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
 
         fname = doc.file_name or ""
         if not fname.endswith((".md", ".txt")):
-            await message.answer("Please send a .md or .txt file with your worksheet answers.")
+            await message.answer("Please send a .md or .txt file with your answers.")
             return
 
-        # Download the file.
         if bot is None:
             await message.answer("Cannot process files right now.")
             return
@@ -478,10 +487,19 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         file_bytes = await bot.download_file(tg_file.file_path)
         text = file_bytes.decode("utf-8", errors="replace")
 
-        # Find the latest pending worksheet.
+        # Route: per-item task file vs daily worksheet.
+        task_match = re.search(r"<!--\s*TASK_ID:\s*(\d+)\s*-->", text)
+        if task_match:
+            await _grade_task_file(svc, message, int(task_match.group(1)), text)
+            return
+
+        # Daily worksheet flow.
+        from tutor.worksheet.generator import worksheet_from_json
+        from tutor.worksheet.grader import grade_worksheet
+        from tutor.worksheet.parser import parse_worksheet_answers
+
         worksheet = svc.repo.get_latest_worksheet(user, status="pending")
         if worksheet is None:
-            # Also check submitted (re-grade scenario).
             worksheet = svc.repo.get_latest_worksheet(user, status="submitted")
         if worksheet is None:
             await message.answer(
@@ -490,14 +508,11 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
             )
             return
 
-        # Parse and grade.
         answers = parse_worksheet_answers(text)
         svc.repo.update_worksheet_answers(worksheet["id"], text)
-
         payload = worksheet_from_json(worksheet["items_json"])
         score, feedback = await grade_worksheet(svc.llm, payload, answers)
         svc.repo.update_worksheet_grade(worksheet["id"], score, feedback)
-
         await message.answer(feedback)
 
     # ---- in-session messages (registered last so commands win) ----

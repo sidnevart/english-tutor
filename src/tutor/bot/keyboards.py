@@ -11,36 +11,15 @@ _LETTERS = "ABCDEFGH"
 
 
 def evening_actions(content_id: int | None) -> Keyboard:
-    """Evening buttons: quiz + discuss today's top item + open-ended speaking."""
+    """Evening buttons: discuss today's top item + open-ended speaking.
+
+    Comprehension practice now happens through the task file delivered with each
+    item, so there is no inline quiz button here.
+    """
     rows: Keyboard = []
     if content_id is not None:
-        rows.append([("📖 Quiz me", f"quiz:start:{content_id}")])
         rows.append([("💬 Discuss today's material", f"discuss:{content_id}")])
     rows.append([("🎙 Speaking practice", "speak:start")])
-    return rows
-
-
-def quiz_start(content_id: int) -> Keyboard:
-    """Single button attached to a delivered item to launch its comprehension quiz."""
-    return [[("📖 Start quiz", f"quiz:start:{content_id}")]]
-
-
-def quiz_options(n: int, *, multi: bool = False, selected: list[int] | None = None) -> Keyboard:
-    """Letter buttons (A, B, …) for the current question, 4 per row.
-
-    For multi-select, selected options are marked with a ✓ and a Submit row is
-    appended. Callback data carries only the option index; the active question is
-    tracked in FSM state.
-    """
-    selected = selected or []
-    buttons: list[tuple[str, str]] = []
-    for i in range(n):
-        letter = _LETTERS[i] if i < len(_LETTERS) else str(i + 1)
-        label = f"✅ {letter}" if (multi and i in selected) else letter
-        buttons.append((label, f"quiz:opt:{i}"))
-    rows: Keyboard = [buttons[j : j + 4] for j in range(0, len(buttons), 4)]
-    if multi:
-        rows.append([("✅ Submit answer", "quiz:submit")])
     return rows
 
 
