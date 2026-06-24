@@ -49,3 +49,7 @@ htmlcov/
 # ---- Claude Code local tooling (not part of the product) ----
 .claude/
 skills-lock.json
+
+# ---- Misc local artifacts ----
+*.bundle
+tests/eval_results.json

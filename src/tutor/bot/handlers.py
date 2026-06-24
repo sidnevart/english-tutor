@@ -1,8 +1,9 @@
-"""aiogram handlers: content delivery, on-demand quiz, and conversation practice.
+"""aiogram handlers: content delivery, task-file grading, and conversation practice.
 
-Quiz progress is DB-derived (restart-safe). Speaking/discussion run as multi-turn
-FSM sessions via `tutor.bot.conversation`. Handler order matters: commands and
-callbacks are registered before the catch-all in-session message handlers.
+Each delivered item comes with a TOEFL task file; the learner fills it in and sends
+it back, and `on_document` grades it. Speaking/discussion run as multi-turn FSM
+sessions via `tutor.bot.conversation`. Handler order matters: commands and callbacks
+are registered before the catch-all in-session message handlers.
 """
 
 from __future__ import annotations
@@ -26,7 +27,6 @@ from tutor.bot.conversation import (
     submit_essay,
 )
 from tutor.bot.keyboards import reset_confirm, speaking_menu
-from tutor.bot.quiz import QuizState, handle_option, handle_submit, start_quiz
 from tutor.bot.speaking import (
     SpeakingState,
     cancel_speaking,
@@ -61,7 +61,7 @@ _ANTI_INJECTION = (
 # Terse one-liners for the Telegram slash menu (set_my_commands). Telegram caps
 # these and shows one per line, so the human-readable detail lives in HELP_TEXT.
 COMMANDS: list[tuple[str, str]] = [
-    ("start", "Today's material + quiz"),
+    ("start", "Today's material + task file"),
     ("next", "Next reading or episode"),
     ("refresh", "Fetch new articles and podcasts now"),
     ("speak", "Speaking practice (voice)"),
@@ -163,7 +163,8 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         await message.answer(
             "👋 <b>TOEFL coach</b>\n"
             "• today's readings/episodes come with an Anki deck (words & idioms)\n"
-            "• tap &quot;📖 Start quiz&quot; under an item for a TOEFL comprehension quiz\n"
+            "• each item arrives with a TOEFL task file — fill it in and send it "
+            "back to get graded\n"
             "• /speak for speaking practice · /progress for your stats"
         )
         if not await deliver_new(svc, user, limit=1):
@@ -440,22 +441,6 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
     async def on_speak_cb(cb: CallbackQuery, state: FSMContext) -> None:
         await cb.answer()
         await start_speaking(svc, bot, cb.from_user.id, state)
-
-    @router.callback_query(F.data.startswith("quiz:start:"))
-    async def on_quiz_start(cb: CallbackQuery, state: FSMContext) -> None:
-        await cb.answer()
-        content_id = int(cb.data.split(":")[2])
-        await start_quiz(svc, bot, cb.from_user.id, state, content_id)
-
-    @router.callback_query(QuizState.active, F.data.startswith("quiz:opt:"))
-    async def on_quiz_opt(cb: CallbackQuery, state: FSMContext) -> None:
-        await cb.answer()
-        await handle_option(svc, bot, cb.from_user.id, state, int(cb.data.split(":")[2]))
-
-    @router.callback_query(QuizState.active, F.data == "quiz:submit")
-    async def on_quiz_submit(cb: CallbackQuery, state: FSMContext) -> None:
-        await cb.answer()
-        await handle_submit(svc, bot, cb.from_user.id, state)
 
     @router.callback_query(F.data.startswith("spk:task:"))
     async def on_speaking_task(cb: CallbackQuery, state: FSMContext) -> None:
