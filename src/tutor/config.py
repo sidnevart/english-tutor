@@ -53,7 +53,7 @@ class Settings(BaseSettings):
 
     # ---- MiMo (Anthropic-compatible fallback) ----
     mimo_base_url: str = "https://api.xiaomimimo.com/anthropic"
-    mimo_model: str = "claude-sonnet-4-20250514"
+    mimo_model: str = "mimo-v2.5-pro"
     mimo_api_key: str = ""
 
     # ---- Adapter selection ----
