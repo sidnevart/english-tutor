@@ -14,7 +14,7 @@ from typing import Literal
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-LLMBackend = Literal["stub", "ollama", "hermes"]
+LLMBackend = Literal["stub", "ollama", "hermes", "mimo"]
 STTBackend = Literal["stub", "whisper", "cloud"]
 TTSBackend = Literal["stub", "groq", "edge", "openai", "cloud"]
 AnkiBackend = Literal["genanki", "ankiconnect", "null"]
@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434/v1"
     ollama_model: str = "glm-5:cloud"
     ollama_api_key: str = "ollama"
+
+    # ---- MiMo (Anthropic-compatible fallback) ----
+    mimo_base_url: str = "https://api.xiaomimimo.com/anthropic"
+    mimo_model: str = "claude-sonnet-4-20250514"
+    mimo_api_key: str = ""
 
     # ---- Adapter selection ----
     llm_backend: LLMBackend = "stub"
