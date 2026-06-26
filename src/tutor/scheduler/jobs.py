@@ -50,7 +50,10 @@ async def refresh_content(svc: Services) -> dict[str, object]:
 
 async def morning_push(svc: Services, user_id: int) -> list[int]:
     """Deliver a cadence-respecting mix: N articles + M podcasts (per .env), each
-    with its words+idioms Anki deck. Podcasts are never crowded out by articles."""
+    with its words+idioms Anki deck, then send the single daily TOEFL file
+    (Reading passages + Listening audio + Vocabulary) for the learner to fill in."""
+    from tutor.worksheet.daily_file import send_daily_file
+
     try:
         delivered: list[int] = []
         delivered += await deliver_new(
@@ -59,6 +62,8 @@ async def morning_push(svc: Services, user_id: int) -> list[int]:
         delivered += await deliver_new(
             svc, user_id, svc.settings.morning_podcasts, ContentType.PODCAST
         )
+        if delivered:
+            await send_daily_file(svc, user_id, delivered)
         svc.repo.log_job("morning_push", "ok", f"delivered {len(delivered)}")
         return delivered
     except Exception as exc:  # noqa: BLE001
@@ -195,171 +200,6 @@ async def evening_reminder(svc: Services, user_id: int) -> None:
         svc.repo.log_job("evening_reminder", "error", str(exc)[:200])
 
 
-async def evening_worksheet(svc: Services, user_id: int) -> None:
-    """Generate and send an evening worksheet with TOEFL-format exercises.
-
-    Collects today's vocabulary, speaking errors, and article content,
-    then generates a printable exercise sheet (MD + PDF).
-    """
-    from pathlib import Path
-
-    from tutor.worksheet.generator import generate_worksheet, worksheet_to_json
-    from tutor.worksheet.renderer import render_worksheet_md, render_worksheet_pdf
-
-    try:
-        # Collect today's data.
-        vocab = svc.repo.get_vocab_today(user_id, limit=15)
-        errors = svc.repo.recent_session_errors(user_id, limit=5)
-        articles = svc.repo.get_today_articles(user_id, limit=2)
-
-        if not vocab and not articles:
-            await svc.notifier.send(
-                user_id,
-                "📝 No materials today to generate a worksheet. "
-                "Read an article or listen to a podcast first!",
-            )
-            return
-
-        # Generate exercises.
-        payload = await generate_worksheet(svc.llm, vocab, errors, articles)
-
-        # Save to DB.
-        items_json = worksheet_to_json(payload)
-        worksheet_id = svc.repo.save_worksheet(user_id, items_json)
-
-        # Render files.
-        from datetime import UTC, datetime
-
-        date_str = datetime.now(UTC).strftime("%Y-%m-%d")
-        md_content = render_worksheet_md(payload, date=date_str)
-
-        md_path = Path(svc.settings.data_dir) / f"worksheet_{date_str}.md"
-        md_path.parent.mkdir(parents=True, exist_ok=True)
-        md_path.write_text(md_content, encoding="utf-8")
-
-        pdf_path = render_worksheet_pdf(md_content, md_path.with_suffix(".pdf"))
-
-        # Send to user.
-        await svc.notifier.send(
-            user_id,
-            f"📝 <b>Evening Worksheet — {date_str}</b>\n\n"
-            f"Today's practice includes:\n"
-            f"  • {len(payload.fill_blanks)} fill-in-the-blank questions\n"
-            f"  • {len(payload.error_correction)} error corrections\n"
-            f"  • {len(payload.sentence_transform)} sentence transformations\n"
-            f"  • {sum(len(s.questions) for s in payload.mini_reading)} reading questions\n"
-            f"  • {len(payload.collocation_match)} collocation matches\n\n"
-            f"Fill in your answers and send the file back when done!",
-        )
-        await svc.notifier.send_file(user_id, md_path, caption="Markdown version")
-        await svc.notifier.send_file(user_id, pdf_path, caption="PDF version")
-
-        svc.repo.log_job(
-            "evening_worksheet",
-            "ok",
-            f"worksheet_id={worksheet_id} vocab={len(vocab)} errors={len(errors)}",
-        )
-    except Exception as exc:  # noqa: BLE001
-        svc.repo.log_job("evening_worksheet", "error", str(exc)[:200])
-
-
-async def homework_push(svc: Services, user_id: int) -> None:
-    """Generate and send a homework file with all of today's assignments.
-
-    Combines reading comprehension (articles), listening comprehension (podcasts),
-    vocabulary exercises, error correction, and more into a single printable file.
-    The user fills it in at their own pace and sends it back for grading.
-    """
-    from pathlib import Path
-
-    from tutor.pipeline import ensure_transcript
-    from tutor.worksheet.generator import generate_worksheet, worksheet_to_json
-    from tutor.worksheet.renderer import render_worksheet_md, render_worksheet_pdf
-
-    try:
-        # Collect today's data.
-        vocab = svc.repo.get_vocab_today(user_id, limit=15)
-        errors = svc.repo.recent_session_errors(user_id, limit=5)
-        articles = svc.repo.get_today_articles(user_id, limit=2)
-        podcasts = svc.repo.get_today_podcasts(user_id, limit=2)
-
-        if not vocab and not articles and not podcasts:
-            await svc.notifier.send(
-                user_id,
-                "📝 No materials today for homework. "
-                "Wait for the morning push or use /next to get content!",
-            )
-            return
-
-        # Ensure podcast transcripts are available.
-        for pod in podcasts:
-            if not pod.body_text.strip():
-                try:
-                    await ensure_transcript(svc, pod.id)
-                except Exception:  # noqa: BLE001
-                    pass  # Skip podcasts that fail to transcribe.
-        # Re-fetch podcasts with transcripts.
-        if podcasts:
-            podcasts = svc.repo.get_today_podcasts(user_id, limit=2)
-
-        # Generate exercises (including reading/listening quizzes).
-        payload = await generate_worksheet(svc.llm, vocab, errors, articles, podcasts)
-
-        # Save to DB.
-        items_json = worksheet_to_json(payload)
-        worksheet_id = svc.repo.save_worksheet(user_id, items_json)
-
-        # Render files.
-        from datetime import UTC, datetime
-
-        date_str = datetime.now(UTC).strftime("%Y-%m-%d")
-        md_content = render_worksheet_md(payload, date=date_str)
-
-        md_path = Path(svc.settings.data_dir) / f"homework_{date_str}.md"
-        md_path.parent.mkdir(parents=True, exist_ok=True)
-        md_path.write_text(md_content, encoding="utf-8")
-
-        pdf_path = render_worksheet_pdf(md_content, md_path.with_suffix(".pdf"))
-
-        # Count sections for the summary.
-        sections: list[str] = []
-        if payload.reading_quiz:
-            sections.append(f"  • {len(payload.reading_quiz)} reading comprehension questions")
-        if payload.listening_quiz:
-            sections.append(f"  • {len(payload.listening_quiz)} listening comprehension questions")
-        if payload.fill_blanks:
-            sections.append(f"  • {len(payload.fill_blanks)} fill-in-the-blank questions")
-        if payload.error_correction:
-            sections.append(f"  • {len(payload.error_correction)} error corrections")
-        if payload.sentence_transform:
-            sections.append(f"  • {len(payload.sentence_transform)} sentence transformations")
-        if payload.mini_reading:
-            sections.append(
-                f"  • {sum(len(s.questions) for s in payload.mini_reading)} mini reading questions"
-            )
-        if payload.collocation_match:
-            sections.append(f"  • {len(payload.collocation_match)} collocation matches")
-
-        # Send to user.
-        await svc.notifier.send(
-            user_id,
-            f"📝 <b>Homework — {date_str}</b>\n\n"
-            f"Today's assignments:\n"
-            + "\n".join(sections)
-            + "\n\nFill in your answers and send the .md file back when done!",
-        )
-        await svc.notifier.send_file(user_id, md_path, caption="Homework (Markdown)")
-        await svc.notifier.send_file(user_id, pdf_path, caption="Homework (PDF)")
-
-        svc.repo.log_job(
-            "homework_push",
-            "ok",
-            f"worksheet_id={worksheet_id} articles={len(articles)} podcasts={len(podcasts)}",
-        )
-    except Exception as exc:  # noqa: BLE001
-        svc.repo.log_job("homework_push", "error", str(exc)[:200])
-
-
 async def essay_reminder(svc: Services, user_id: int) -> None:
     """Weekly nudge to practice TOEFL essay writing."""
     try:
@@ -381,13 +221,14 @@ async def essay_reminder(svc: Services, user_id: int) -> None:
 
 
 async def weekly_summary(svc: Services, user_id: int) -> None:
-    """Weekly progress summary: stats, weak topics, recurring errors, recommendations."""
+    """Weekly progress summary: stats, trends, topics, errors, LLM recommendations."""
     try:
         delivered = svc.repo.count_status(user_id, DeliveryStatus.DELIVERED)
         reviewed = svc.repo.count_status(user_id, DeliveryStatus.REVIEWED)
         cards = svc.repo.anki_card_count(user_id)
         essays = svc.repo.essay_count(user_id)
         streak = svc.repo.practice_streak(user_id)
+        vocab_n = svc.repo.vocab_seen_count(user_id)
         weak = svc.repo.weak_topics(user_id, limit=3)
         strong = svc.repo.strong_topics(user_id, limit=3)
         top_errors = svc.repo.top_session_errors(user_id, limit=3)
@@ -395,10 +236,9 @@ async def weekly_summary(svc: Services, user_id: int) -> None:
         parts = [
             "📊 <b>Weekly Summary</b>\n",
             f"🔥 Streak: <b>{streak} day(s)</b>",
-            f"• Reviewed this week: <b>{reviewed}</b> items",
-            f"• Anki cards total: <b>{cards}</b>",
-            f"• Essays written: <b>{essays}</b>",
-            f"• Items pending review: <b>{delivered}</b>",
+            f"• Reviewed: <b>{reviewed}</b>  ·  Pending: <b>{delivered}</b>",
+            f"• Anki cards: <b>{cards}</b>  ·  Vocabulary: <b>{vocab_n}</b> words",
+            f"• Essays: <b>{essays}</b>",
         ]
 
         writing = svc.repo.essay_scores(user_id)
@@ -408,8 +248,33 @@ async def weekly_summary(svc: Services, user_id: int) -> None:
         if speaking["count"]:
             parts.append(f"• Speaking avg: <b>{(speaking['avg'] or 0.0):.1f}/4</b>")
 
+        # Quiz accuracy trend.
+        accuracy = svc.repo.quiz_accuracy_by_week(user_id, weeks=4)
+        if accuracy:
+            trend = ""
+            if len(accuracy) >= 2:
+                diff = accuracy[-1]["pct"] - accuracy[-2]["pct"]
+                trend = " ↑" if diff > 0 else (" ↓" if diff < 0 else " →")
+            week_strs = [
+                f"{r['week']} {round(r['pct'])}%"
+                for r in accuracy
+            ]
+            parts.append("\n<b>📈 Quiz accuracy:</b>" + trend)
+            parts.append("  " + " · ".join(week_strs))
+
+        # Error trend.
+        errors_by_week = svc.repo.error_count_by_week(user_id, weeks=4)
+        if errors_by_week:
+            trend = ""
+            if len(errors_by_week) >= 2:
+                diff = errors_by_week[-1]["count"] - errors_by_week[-2]["count"]
+                trend = " ↑" if diff > 0 else (" ↓" if diff < 0 else " →")
+            week_strs = [f"{r['week']} {r['count']}" for r in errors_by_week]
+            parts.append("\n<b>⚠️ Errors:</b>" + trend)
+            parts.append("  " + " · ".join(week_strs))
+
         if weak:
-            parts.append("\n<b>📉 Focus areas (weakest topics):</b>")
+            parts.append("\n<b>📉 Focus areas:</b>")
             for t in weak:
                 pct = round(t["avg_score"] * 100)
                 parts.append(f"  • {t['topic']}: {pct}%")
@@ -423,17 +288,31 @@ async def weekly_summary(svc: Services, user_id: int) -> None:
         if top_errors:
             parts.append("\n<b>🔄 Top recurring errors:</b>")
             for e in top_errors:
-                parts.append(f'  • "{e["error_text"]}" → "{e["correction"]}" ({e["count"]}x)')
+                parts.append(
+                    f'  • "{e["error_text"]}" → "{e["correction"]}" ({e["count"]}x)'
+                )
 
-        parts.append(
-            "\n<b>💡 Recommendations:</b>\n"
-            "  • Use /review for targeted grammar &amp; vocabulary practice\n"
-            "  • Use /write for TOEFL essay practice\n"
-            "  • Use /speaking for timed, scored TOEFL Speaking tasks\n"
-            "  • Use /coach for an adaptive learning session"
-        )
+        # LLM-generated recommendations.
+        try:
+            from tutor.memory.context import build_learner_context
+
+            ctx = build_learner_context(svc.repo, user_id, svc.settings.soul_dir)
+            rec = await svc.llm.complete(
+                "You are a TOEFL coach. Based on this learner's profile, give exactly "
+                "2 specific, actionable study recommendations for the week ahead. "
+                "Keep each to one sentence. Return plain text, one recommendation per line.",
+                f"LEARNER PROFILE:\n{ctx}",
+            )
+            parts.append(f"\n<b>💡 Recommendations:</b>\n{rec.strip()}")
+        except Exception:  # noqa: BLE001
+            parts.append(
+                "\n<b>💡 Recommendations:</b>\n"
+                "  • Use /daily + /speaking + /write for balanced daily practice."
+            )
 
         await svc.notifier.send(user_id, "\n".join(parts))
-        svc.repo.log_job("weekly_summary", "ok", f"streak={streak} reviewed={reviewed}")
+        svc.repo.log_job(
+            "weekly_summary", "ok", f"streak={streak} reviewed={reviewed} vocab={vocab_n}"
+        )
     except Exception as exc:  # noqa: BLE001
         svc.repo.log_job("weekly_summary", "error", str(exc)[:200])

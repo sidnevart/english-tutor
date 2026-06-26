@@ -1,4 +1,4 @@
-"""Pure channel-message -> RawItem normalization and EPUB text extraction."""
+"""Pure channel-message -> RawItem normalization and announcement pairing."""
 
 from __future__ import annotations
 
@@ -9,9 +9,6 @@ from tutor.domain.enums import ContentType, SourceType
 from tutor.domain.models import RawItem
 from tutor.ingest.telegram_scraper import (
     _announcement_ids,
-    _epub_text,
-    _epub_title,
-    _fb2_sections,
     is_suitable,
     normalize,
 )
@@ -82,46 +79,7 @@ def test_normalize_skips_empty_message():
 
 
 # ---------------------------------------------------------------------------
-# EPUB text helpers
-# ---------------------------------------------------------------------------
-
-_XHTML_CHAPTER = b"""<?xml version="1.0"?>
-<html><body>
-<h2>Chapter One: The Beginning</h2>
-<p>It was the best of times, it was the worst of times. The long and winding
-road leads to meaningful discovery and understanding of the human condition.</p>
-<p>Another paragraph with more English text that makes this chapter long enough
-to be considered a real article worth reading and studying carefully.</p>
-</body></html>
-"""
-
-
-def test_epub_text_strips_html():
-    text = _epub_text(_XHTML_CHAPTER)
-    assert "<" not in text
-    assert "Chapter One" in text
-    assert "It was the best of times" in text
-
-
-def test_epub_text_collapses_whitespace():
-    text = _epub_text(_XHTML_CHAPTER)
-    assert "\n" not in text
-    assert "  " not in text
-
-
-def test_epub_title_extracts_h2():
-    title = _epub_title(_XHTML_CHAPTER, fallback="fallback")
-    assert title == "Chapter One: The Beginning"
-
-
-def test_epub_title_falls_back_when_no_heading():
-    html = b"<html><body><p>Just a paragraph, no heading here.</p></body></html>"
-    title = _epub_title(html, fallback="chapter01.xhtml")
-    assert title == "chapter01.xhtml"
-
-
-# ---------------------------------------------------------------------------
-# Announcement ↔ file pairing
+# Announcement ↔ file pairing (file attachments are skipped, their blurb too)
 # ---------------------------------------------------------------------------
 
 
@@ -177,38 +135,3 @@ def test_standalone_text_is_not_consumed():
 def test_file_without_adjacent_text_consumes_nothing():
     by_id = {200: FileMsg(id=200)}
     assert _announcement_ids(by_id) == set()
-
-
-# ---------------------------------------------------------------------------
-# FB2 extraction
-# ---------------------------------------------------------------------------
-
-_FB2 = b"""<?xml version="1.0" encoding="utf-8"?>
-<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">
-<body>
-<section>
-<title><p>Chapter One</p></title>
-<p>It was a bright cold day in April, and the clocks were striking thirteen.
-The hallway smelt of boiled cabbage and old rag mats, a passage long enough
-to be considered a real chapter worth reading and studying carefully.</p>
-</section>
-<section>
-<title><p>Short</p></title>
-<p>Too short.</p>
-</section>
-</body>
-</FictionBook>
-"""
-
-
-def test_fb2_sections_extracts_title_and_text():
-    sections = _fb2_sections(_FB2)
-    assert len(sections) == 2
-    title, text = sections[0]
-    assert title == "Chapter One"
-    assert "bright cold day in April" in text
-    assert "<" not in text
-
-
-def test_fb2_sections_handles_malformed_xml():
-    assert _fb2_sections(b"not xml at all <<<") == []

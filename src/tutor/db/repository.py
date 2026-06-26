@@ -618,6 +618,73 @@ class Repository:
         ).fetchall()
         return {r["content_type"]: int(r["c"]) for r in rows}
 
+    def quiz_accuracy_by_week(
+        self, user_id: int, weeks: int = 4
+    ) -> list[dict[str, object]]:
+        """Return per-week quiz accuracy (last N weeks). Each entry has
+        week (ISO year-week), correct, total, and pct (0.0-100.0)."""
+        from datetime import timedelta
+
+        cutoff = (
+            (datetime.now(UTC) - timedelta(days=weeks * 7))
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .isoformat()
+        )
+        rows = self.conn.execute(
+            """
+            SELECT strftime('%Y-W%W', a.answered_at) AS week,
+                   SUM(a.is_correct) AS correct, COUNT(*) AS total
+            FROM attempt a
+            WHERE a.user_id = ? AND a.answered_at >= ?
+            GROUP BY week ORDER BY week
+            """,
+            (user_id, cutoff),
+        ).fetchall()
+        return [
+            {
+                "week": r["week"],
+                "correct": int(r["correct"]),
+                "total": int(r["total"]),
+                "pct": round(100 * r["correct"] / r["total"], 1) if r["total"] else 0.0,
+            }
+            for r in rows
+        ]
+
+    def error_count_by_week(
+        self, user_id: int, weeks: int = 4
+    ) -> list[dict[str, object]]:
+        """Return per-week error count (last N weeks)."""
+        from datetime import timedelta
+
+        cutoff = (
+            (datetime.now(UTC) - timedelta(days=weeks * 7))
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .isoformat()
+        )
+        rows = self.conn.execute(
+            """
+            SELECT strftime('%Y-W%W', created_at) AS week,
+                   COUNT(*) AS count
+            FROM session_error
+            WHERE user_id = ? AND created_at >= ?
+            GROUP BY week ORDER BY week
+            """,
+            (user_id, cutoff),
+        ).fetchall()
+        return [{"week": r["week"], "count": int(r["count"])} for r in rows]
+
+    def vocab_seen_count(self, user_id: int) -> int:
+        """Return the total number of distinct vocabulary words seen."""
+        row = self.conn.execute(
+            """
+            SELECT COUNT(DISTINCT v.word) AS c FROM vocab_item v
+            JOIN content_item ci ON ci.id = v.content_id
+            WHERE ci.user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+        return int(row["c"])
+
     def recent_job_logs(self, limit: int = 10) -> list[dict[str, str]]:
         """Return the most recent schedule_log entries."""
         rows = self.conn.execute(
@@ -755,6 +822,39 @@ class Repository:
 
         self.conn.commit()
         return counts
+
+    # ---- writing tasks (file-based essay flow) ----------------------------
+    def save_writing_task(
+        self,
+        user_id: int,
+        essay_type: str,
+        prompt: str,
+        passage: str = "",
+        lecture: str = "",
+    ) -> int:
+        """Create a pending writing-task row and return its id."""
+        cur = self.conn.execute(
+            """
+            INSERT INTO writing_task
+                (user_id, essay_type, prompt, passage, lecture, status, created_at)
+            VALUES (?, ?, ?, ?, ?, 'pending', ?)
+            """,
+            (user_id, essay_type, prompt, passage, lecture, _now()),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def get_writing_task(self, task_id: int) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM writing_task WHERE id = ?", (task_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def mark_writing_task_submitted(self, task_id: int) -> None:
+        self.conn.execute(
+            "UPDATE writing_task SET status = 'submitted' WHERE id = ?", (task_id,)
+        )
+        self.conn.commit()
 
     # ---- worksheets --------------------------------------------------------
     def save_worksheet(self, user_id: int, items_json: str) -> int:

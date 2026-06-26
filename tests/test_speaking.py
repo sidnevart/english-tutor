@@ -106,3 +106,66 @@ async def test_handle_response_too_short_does_not_persist(tmp_path):
 
         await handle_response(svc, None, user, state, "ok")  # < 5 chars
         assert svc.repo.speaking_scores(user)["count"] == 0
+
+
+async def test_start_task_listening_is_audio_only_no_transcript(tmp_path, monkeypatch):
+    """Integrated task: the listening part goes to _say_audio_only (audio, no
+    transcript in the chat); the reading part is still sent as text."""
+    from tutor.bot import speaking as spk
+
+    audio_calls: list[str] = []
+
+    async def fake_audio_only(svc, bot, user_id, text, caption="🎧 Listen to the audio"):
+        audio_calls.append(text)
+
+    async def fake_gen(llm, task_type):
+        return SpeakingTaskPayload(
+            task_type=task_type,
+            prompt="State the opinion and explain the reasons.",
+            reading="A campus announcement about parking.",
+            listening="A student disagrees with the announcement for two reasons.",
+        )
+
+    monkeypatch.setattr(spk, "_say_audio_only", fake_audio_only)
+    monkeypatch.setattr(spk, "generate_speaking_task", fake_gen)
+
+    settings = _settings(tmp_path)
+    settings.speaking_grace_sec = 0  # no real delay in the test
+    with open_services(settings) as svc:
+        user = settings.admin_user_id
+        svc.repo.ensure_subscriber(user)
+        state = FakeState()
+        await spk.start_speaking_task(svc, None, user, state, "campus")
+
+        task = SpeakingTaskPayload(**(await state.get_data())["task"])
+        # Listening was routed to audio-only exactly once, with the transcript.
+        assert audio_calls == [task.listening]
+        # The reading part IS shown as text; the listening transcript is NOT.
+        sent = "\n".join(m.text for m in svc.notifier.messages)
+        assert task.reading in sent
+        assert task.listening not in sent
+
+
+async def test_start_task_independent_has_no_grace_or_audio(tmp_path, monkeypatch):
+    """Independent task (no listening): no audio-only call and no grace delay."""
+    from tutor.bot import speaking as spk
+
+    audio_calls: list[str] = []
+
+    async def fake_audio_only(svc, bot, user_id, text, caption="🎧 Listen to the audio"):
+        audio_calls.append(text)
+
+    async def fake_gen(llm, task_type):
+        return SpeakingTaskPayload(task_type="independent", prompt="Do you prefer X or Y?")
+
+    monkeypatch.setattr(spk, "_say_audio_only", fake_audio_only)
+    monkeypatch.setattr(spk, "generate_speaking_task", fake_gen)
+
+    settings = _settings(tmp_path)
+    settings.speaking_grace_sec = 0
+    with open_services(settings) as svc:
+        user = settings.admin_user_id
+        svc.repo.ensure_subscriber(user)
+        state = FakeState()
+        await spk.start_speaking_task(svc, None, user, state, "independent")
+        assert audio_calls == []  # independent task has no listening part

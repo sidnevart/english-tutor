@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     tg_session_path: str = "bot_data/telegram_e2e_session"
     scrape_channels: str = "1137165265,1356345589"
     min_article_len: int = 350  # drop blurbs/ads shorter than this when scraping
-    max_article_len: int = 8000  # ~1200 words; longer reading sets (20-30 min goal)
+    max_article_len: int = 4500  # ~700-900 words; TOEFL-passage scale (honest read time)
     scrape_daily_limit: int = 50  # new messages to check per channel per daily run
     scrape_history_batch: int = 200  # historical messages to backfill per channel per run
     pdf_max_size_mb: int = 100  # max PDF size to download (MB)
@@ -91,10 +91,13 @@ class Settings(BaseSettings):
     essay_cron: str = "0 18 * * 3,6"  # weekly essay reminder (Wed + Sat at 18:00)
     weekly_summary_cron: str = "0 19 * * 0"  # weekly summary (Sunday at 19:00)
     flashcards_per_item: int = 0  # Anki cards per delivered item; 0 = unlimited (exhaustive)
-    reading_questions: int = 10  # TOEFL iBT reading-set size (questions per article)
-    listening_questions: int = 6  # TOEFL iBT listening-set size (questions per podcast)
+    reading_questions: int = 10  # TOEFL iBT reading-set size (legacy per-item interactive)
+    listening_questions: int = 6  # TOEFL iBT listening-set size (legacy per-item interactive)
+    reading_questions_per_item: int = 4  # questions per article in the daily file
+    listening_questions_per_item: int = 4  # questions per podcast in the daily file
     reading_time_min: int = 18  # recommended soft time limit for a reading set (minutes)
     listening_time_min: int = 7  # recommended soft time limit for a listening set (minutes)
+    speaking_grace_sec: int = 6  # head start before the speaking prep timer starts
     db_path: str = "data/tutor.db"
     data_dir: str = "data"
     soul_dir: str = "soul"

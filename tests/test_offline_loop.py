@@ -1,23 +1,34 @@
 """The whole loop, end to end, on stubs only — no network, no secrets.
 
-deliver -> build evaluation -> grade -> review -> .apkg, asserting the state
-machine and the produced artifacts at each step.
+deliver -> daily TOEFL file (builds quiz + vocab) -> fill in -> grade ->
+reviewed + Anki, asserting the state machine and the produced artifacts.
 """
 
 from __future__ import annotations
+
+import re
 
 from tutor.adapters.notify.stub import StubNotifier
 from tutor.app import open_services
 from tutor.config import Settings
 from tutor.domain.enums import ContentType, DeliveryStatus, SourceType
 from tutor.domain.models import RawItem
-from tutor.pipeline import deliver_new, submit_answers
+from tutor.pipeline import deliver_new
+from tutor.worksheet.daily_file import (
+    daily_from_json,
+    grade_daily,
+    render_daily_md,
+    send_daily_file,
+)
 
 ARTICLE = (
-    "Researchers describe a serendipitous discovery: an ephemeral compound "
+    "Researchers describe a seripitous discovery: an ephemeral compound "
     "with ubiquitous applications. The quotidian work of the lab belies its "
-    "profound implications for sustainable energy."
+    "profound implications for sustainable energy. The findings could reshape "
+    "how industry approaches catalysis, renewable storage, and emissions."
 )
+
+_LETTERS = "ABCDEFGH"
 
 
 def _settings(tmp_path) -> Settings:
@@ -50,43 +61,56 @@ async def test_full_loop_offline(tmp_path):
         )
         assert cid is not None
 
-        # 1) Morning delivery: card (no quiz button) + Anki deck + task file
+        # 1) Morning delivery: a card + Anki deck, NO per-item task file.
         delivered = await deliver_new(svc, user, limit=5)
         assert delivered == [cid]
         assert svc.repo.get(cid).status == DeliveryStatus.DELIVERED
         notifier: StubNotifier = svc.notifier  # type: ignore[assignment]
         assert len(notifier.messages) == 1
-        # No inline quiz button — task file is sent as attachment instead.
         assert notifier.messages[0].keyboard is None
-        # Task file (.md) is sent right after delivery.
-        task_files = [f for f in notifier.files if f.caption and "task" in f.caption]
-        assert len(task_files) == 1
+        # No per-item task file anymore (consolidated into the daily file).
+        task_files = [f for f in notifier.files if f.caption and "task" in f.caption.lower()]
+        assert len(task_files) == 0
 
-        # 2) The quiz was already built by deliver_new; load it (idempotent re-build is ok).
+        # 2) Build + send the daily TOEFL file (builds & saves the quiz + vocab).
+        assert await send_daily_file(svc, user, [cid])
         quiz = svc.repo.get_quiz_auto(cid)
         assert quiz is not None
-        assert len(quiz.questions) == 3
+        assert len(quiz.questions) >= 1
         assert len(svc.repo.get_vocab(cid)) > 0
+        daily_files = [f for f in notifier.files if f.caption and "Daily TOEFL" in f.caption]
+        assert len(daily_files) == 1
 
-        # 3) Answer: all correct except the first question
-        answers = {q.id: q.correct_index for q in quiz.questions}
-        first = quiz.questions[0]
-        answers[first.id] = (first.correct_index + 1) % len(first.options)
+        # 3) Fill in all-correct answers and grade the daily file.
+        ws = svc.repo.get_latest_worksheet(user, status="pending")
+        assert ws is not None
+        payload = daily_from_json(ws["items_json"])
+        md = render_daily_md(payload, ws["id"])
 
-        result = await submit_answers(svc, cid, user, answers)
-        assert result.total == 3
-        assert result.correct == 2
+        correct: list[str] = []
+        for block in payload.reading:
+            correct += [_LETTERS[q.correct_index] for q in block.questions]
+        for block in payload.listening:
+            correct += [_LETTERS[q.correct_index] for q in block.questions]
+        correct += [_LETTERS[q.correct_index] for q in payload.fill_blanks]
+        correct += ["A" for _ in payload.collocation_match]  # correct partner is first
 
-        # 4) Reviewed + Anki artifact + learner notified with the deck file
+        it = iter(correct)
+
+        def _fill(_m: object) -> str:
+            return next(it, "____")
+
+        filled = re.sub(r"____", _fill, md)
+        score, feedback = await grade_daily(svc, user, payload, filled)
+
+        # 4) Reviewed + attempts recorded + Anki deck for missed (none missed here).
         assert svc.repo.get(cid).status == DeliveryStatus.REVIEWED
-        assert result.anki.apkg_path is not None
-        from pathlib import Path
-
-        assert Path(result.anki.apkg_path).exists()
-        # files: task_md (from deliver_new) + missed_cards .apkg (from finalize_review)
-        anki_files = [f for f in notifier.files if f.caption and f.caption.startswith("🎴")]
-        assert len(anki_files) >= 1
-
-        # attempts persisted: exactly one wrong
+        assert 0.0 <= score <= 1.0
+        assert "Daily TOEFL Results" in feedback
         attempts = svc.repo.attempts_for_content(cid, user)
-        assert sum(1 for a in attempts if not a.is_correct) == 1
+        assert len(attempts) == len(quiz.questions)
+        assert all(a.is_correct for a in attempts)
+
+        # 5) Missed-cards Anki deck is delivered by the grader.
+        anki_files = [f for f in notifier.files if f.caption and "🎴" in f.caption]
+        assert len(anki_files) >= 1
