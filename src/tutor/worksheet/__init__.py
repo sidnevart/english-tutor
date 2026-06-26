@@ -1,1 +1,1 @@
-"""Evening worksheet pipeline: generate → render → parse → grade."""
+"""Worksheet package: vocab exercise models, parsers, and the daily TOEFL file."""

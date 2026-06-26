@@ -163,6 +163,22 @@ CREATE TABLE IF NOT EXISTS worksheet (
 
 CREATE INDEX IF NOT EXISTS ix_worksheet_user ON worksheet (user_id, created_at);
 
+-- Writing task files: a generated TOEFL writing prompt the learner fills in and
+-- sends back as a file (not same-day). The submitted essay is then graded and
+-- stored in the `essay` table; this row tracks the pending prompt + its sources.
+CREATE TABLE IF NOT EXISTS writing_task (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL,
+    essay_type  TEXT NOT NULL,                       -- independent | integrated | email
+    prompt      TEXT NOT NULL,
+    passage     TEXT NOT NULL DEFAULT '',             -- reading passage (integrated)
+    lecture     TEXT NOT NULL DEFAULT '',             -- lecture transcript (integrated; audio-only)
+    status      TEXT NOT NULL DEFAULT 'pending',      -- pending | submitted
+    created_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_writing_task_user ON writing_task (user_id, created_at);
+
 -- Per-channel scrape watermarks: track newest and oldest message IDs seen
 -- so each daily run picks up new posts and continues backfilling history.
 CREATE TABLE IF NOT EXISTS channel_watermark (

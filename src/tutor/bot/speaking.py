@@ -15,7 +15,7 @@ from typing import Any
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-from tutor.bot.conversation import _say, download_voice
+from tutor.bot.conversation import _say_audio_only, download_voice
 from tutor.eval.schemas import SpeakingTaskPayload
 from tutor.eval.speaking import (
     TASK_LABELS,
@@ -73,12 +73,14 @@ async def start_speaking_task(
     if task.reading:
         await svc.notifier.send(user_id, f"<b>Read:</b>\n{task.reading}")
     if task.listening:
-        # Read the listening part aloud (best-effort TTS), like the real exam.
-        await _say(svc, bot, user_id, f"🎧 <b>Listen:</b>\n{task.listening}")
+        # Listening part: audio ONLY, no transcript (exam-style). On a stub/no-TTS
+        # setup _say_audio_only falls back to text so the task stays doable offline.
+        await _say_audio_only(svc, bot, user_id, task.listening)
     await svc.notifier.send(
         user_id,
         f"<b>Question:</b>\n{task.prompt}\n\n"
-        f"⏳ Preparation: <b>{prep_sec}s</b>. Then speak for <b>{resp_sec}s</b>.\n"
+        + ("▶️ Play the audio, then your prep begins. " if task.listening else "")
+        + f"⏳ Preparation: <b>{prep_sec}s</b>. Then speak for <b>{resp_sec}s</b>.\n"
         "Answer by voice (or type) when prompted. Send /stop to cancel.",
     )
 
@@ -86,6 +88,10 @@ async def start_speaking_task(
     await state.update_data(task=task.model_dump(), phase="prep")
 
     _cancel_timers(user_id)
+    # Grace period so the learner can read the task and start the audio before
+    # the prep timer begins (only for tasks with a listening part).
+    if task.listening and svc.settings.speaking_grace_sec > 0:
+        await asyncio.sleep(svc.settings.speaking_grace_sec)
     _schedule(
         user_id,
         _nudge(

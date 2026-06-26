@@ -8,6 +8,7 @@ are registered before the catch-all in-session message handlers.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from aiogram import F, Router
@@ -22,9 +23,7 @@ from tutor.bot.conversation import (
     handle_turn,
     start_coach_session,
     start_discussion,
-    start_essay,
     start_speaking,
-    submit_essay,
 )
 from tutor.bot.keyboards import reset_confirm, speaking_menu
 from tutor.bot.speaking import (
@@ -34,6 +33,7 @@ from tutor.bot.speaking import (
     handle_voice_response,
     start_speaking_task,
 )
+from tutor.bot.writing import grade_essay_file, start_writing_task
 from tutor.domain.enums import DeliveryStatus
 from tutor.domain.models import Card
 from tutor.factory import Services
@@ -73,8 +73,7 @@ COMMANDS: list[tuple[str, str]] = [
     ("progress", "Your stats and content queue"),
     ("write", "TOEFL essay practice"),
     ("reset", "Reset all progress and start fresh"),
-    ("worksheet", "Generate an evening practice worksheet"),
-    ("homework", "Today's homework file (reading + listening + exercises)"),
+    ("daily", "Today's TOEFL file (reading + listening + vocab)"),
     ("help", "Show available commands"),
 ]
 
@@ -84,29 +83,31 @@ HELP_TEXT = (
     "<b>\U0001f4a1 How to learn with this bot</b>\n"
     "A simple daily loop that turns reading &amp; listening into real progress:\n"
     "  1. <b>Morning</b> - /start (then /next for more). Read the article or "
-    "listen to the episode. Each item comes with a <b>TOEFL task file</b>: "
-    "fill in your answers and send the file back to get graded.\n"
+    "listen to the episode. The morning push also brings a single <b>daily "
+    "TOEFL file</b> (Reading passage + Listening audio + Vocabulary): fill in "
+    "your answers and send the file back to get graded.\n"
     "  2. <b>On the go</b> - send a <b>voice message</b> any time for a quick "
     "coach reply, or <code>/coach &lt;question&gt;</code> for a one-off "
     "(e.g. <code>/coach what does 'ubiquitous' mean?</code>).\n"
     "  3. <b>Practice actively</b> - /speak for free-form spoken practice, "
     "/speaking for strict timed TOEFL Speaking (scored 0-4), /write for a TOEFL "
-    "essay (scored 0-5 with feedback).\n"
-    "  4. <b>Evening</b> - /review for grammar, vocabulary &amp; comprehension, "
-    "then /cards to export today's Anki deck and review it in the Anki app.\n"
+    "essay task file (scored 0-5 with feedback).\n"
+    "  4. <b>Evening</b> (your 20:00-21:00 hour) - finish the daily TOEFL file "
+    "and send it back, then /cards to export today's Anki deck and review it.\n"
     "  5. <b>Check yourself</b> - /progress for your streak, scores and weak/strong "
     "topics, then /coach (no args) for an adaptive session that targets your "
     "weak areas.\n\n"
-    "Rule of thumb: <i>read/listen every day, turn each item into a task file, "
+    "Rule of thumb: <i>read/listen every day, fill in the daily TOEFL file, "
     "and review your Anki cards. Consistency beats volume.</i>\n\n"
     "<b>\U0001f4da Content</b>\n"
     "/start - register and deliver today's first reading or episode "
     "(with its words &amp; idioms Anki deck)\n"
     "/next - deliver the next reading or episode\n"
     "/refresh - fetch new articles &amp; podcasts right now (admin only)\n\n"
-    "<b>\U0001f4dd Homework</b>\n"
-    "/homework - get today's homework file with reading, listening, "
-    "and vocabulary exercises. Fill in your answers and send the file back!\n\n"
+    "<b>\U0001f4dd Daily file</b>\n"
+    "/daily - get today's single TOEFL file: Reading passage(s) + Listening "
+    "(audio attached) + Vocabulary. Fill in your answers and send the file back "
+    "to get graded. It also arrives with the morning push.\n\n"
     "<b>\U0001f999 Speaking &amp; dialog</b>\n"
     "/speak - free-form spoken practice: I set a task, you answer by voice or "
     "text, and we go back and forth\n"
@@ -117,46 +118,19 @@ HELP_TEXT = (
     "(e.g. <code>/coach what does 'ubiquitous' mean?</code>)\n"
     "/stop - end the current session and get detailed feedback with error tracking\n\n"
     "<b>\U0001f4dd Writing</b>\n"
-    "/write - TOEFL essay practice (rotates: independent, integrated, email)\n\n"
+    "/write - TOEFL essay task file (rotates: independent, integrated, email). "
+    "Fill in and send the file back when ready — graded 0-5.\n\n"
     "<b>\U0001f319 Review</b>\n"
     "/review - evening review: grammar, vocabulary &amp; listening at C1 level\n\n"
     "<b>\U0001f4ca Tracking</b>\n"
     "/cards - today's Anki cards (add <code>all</code> for full deck, "
     "<code>more</code> to generate extra cards from your latest material)\n"
     "/progress - your stats: cards, errors, recurring mistakes\n"
-    "/reset - wipe all progress and start fresh (articles &amp; episodes stay)\n"
-    "/worksheet - generate an evening practice worksheet (TOEFL format)\n\n"
-    "<i>Tip: use /homework after reading articles or listening to podcasts to "
-    "get a file with comprehension questions. A plain voice message any time "
-    "gets a quick coach reply.</i>"
+    "/reset - wipe all progress and start fresh (articles &amp; episodes stay)\n\n"
+    "<i>Tip: the morning push brings today's material + the daily TOEFL file. "
+    "Fill it in over the day and send it back in the evening. A plain voice "
+    "message any time gets a quick coach reply.</i>"
 )
-
-
-async def _grade_task_file(svc: Services, message: Message, content_id: int, text: str) -> None:
-    """Grade a per-item TOEFL task file submitted by the learner."""
-    from tutor.pipeline import submit_answers
-    from tutor.worksheet.parser import normalize_letter, parse_fill_blanks
-
-    user_id = message.from_user.id
-    quiz = svc.repo.get_quiz_auto(content_id)
-    if quiz is None:
-        await message.answer("⚠️ Quiz not found for this task — it may have already been reviewed.")
-        return
-
-    letter_answers = parse_fill_blanks(text)
-    answers: dict[int, int] = {}
-    for i, q in enumerate(quiz.questions):
-        letter = letter_answers[i] if i < len(letter_answers) else ""
-        idx = normalize_letter(letter)
-        answers[q.id] = idx if idx is not None else -1
-
-    content = svc.repo.get(content_id)
-    title = (content.title or "this task") if content else "this task"
-    await message.answer(f"📝 Grading your task: <b>{title}</b>…")
-    try:
-        await submit_answers(svc, content_id, user_id, answers)
-    except Exception as exc:  # noqa: BLE001
-        await message.answer(f"Error grading: {str(exc)[:120]}")
 
 
 async def _coach_reply(svc: Services, user_id: int, utterance: str) -> str:
@@ -181,8 +155,9 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         await message.answer(
             "👋 <b>TOEFL coach</b>\n"
             "• today's readings/episodes come with an Anki deck (words & idioms)\n"
-            "• each item arrives with a TOEFL task file — fill it in and send it "
-            "back to get graded\n"
+            "• the morning push also brings a single <b>daily TOEFL file</b> "
+            "(Reading + Listening + Vocabulary) — fill it in and send it back "
+            "to get graded (or use /daily anytime)\n"
             "• /speak for speaking practice · /progress for your stats"
         )
         if not await deliver_new(svc, user, limit=1):
@@ -211,12 +186,7 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
     async def on_stop(message: Message, state: FSMContext) -> None:
         current = await state.get_state()
         if current is None:
-            await message.answer("Nothing to stop - start with /speak or /write.")
-            return
-        # If in essay mode, just cancel (no feedback needed).
-        if current == ConversationState.essay:
-            await state.clear()
-            await message.answer("Essay cancelled. Use /write to start again.")
+            await message.answer("Nothing to stop - start with /speak or /speaking.")
             return
         # Strict speaking task: cancel timers and the task.
         if current == SpeakingState.active:
@@ -309,9 +279,9 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         )
 
     @router.message(Command("write"))
-    async def on_write(message: Message, state: FSMContext) -> None:
-        """TOEFL essay writing practice."""
-        await start_essay(svc, bot, message.from_user.id, state)
+    async def on_write(message: Message) -> None:
+        """TOEFL writing practice: generate a task file to fill in and send back."""
+        await start_writing_task(svc, bot, message.from_user.id)
 
     @router.message(Command("cards"))
     async def on_cards(message: Message) -> None:
@@ -353,6 +323,7 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         cards = svc.repo.anki_card_count(user)
         essays = svc.repo.essay_count(user)
         streak = svc.repo.practice_streak(user)
+        vocab_n = svc.repo.vocab_seen_count(user)
 
         top_errors = svc.repo.top_session_errors(user, limit=5)
         weak = svc.repo.weak_topics(user, limit=3)
@@ -361,56 +332,90 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         arts_q = new_by_type.get("article", 0)
         pods_q = new_by_type.get("podcast", 0)
 
-        parts = [
-            "📊 <b>Your progress</b>\n",
-            f"🔥 Streak: <b>{streak} day(s)</b> in a row",
-            f"• Anki cards: <b>{cards}</b>",
-            f"• Delivered (awaiting practice): <b>{delivered}</b>",
-            f"• Quizzed/reviewed: <b>{reviewed}</b>",
-            f"• Queued for delivery: <b>{new}</b>"
-            + (f"  (📰 {arts_q} articles · 🎧 {pods_q} podcasts)" if new else ""),
-            f"• Essays written: <b>{essays}</b>",
-        ]
+        parts = ["📊 <b>Your progress</b>\n"]
 
+        # --- Streak + core numbers ---
+        parts.append(f"🔥 Streak: <b>{streak} day(s)</b> in a row")
+        parts.append(f"• Anki cards: <b>{cards}</b>")
+        parts.append(
+            f"• Queued: <b>{new}</b>"
+            + (f"  (📰 {arts_q} · 🎧 {pods_q})" if new else "")
+            + f"  · Delivered: <b>{delivered}</b>  · Reviewed: <b>{reviewed}</b>"
+        )
+        parts.append(f"• Essays written: <b>{essays}</b>")
+        parts.append(f"• Vocabulary: <b>{vocab_n}</b> distinct words seen")
+
+        # --- Writing / Speaking scores ---
         essay_stats = svc.repo.essay_scores(user)
         if essay_stats["count"]:
             avg = essay_stats["avg"] or 0.0
             last = essay_stats["last"]
             last_type = essay_stats["last_type"] or ""
             parts.append(
-                f"• Writing score: avg <b>{avg:.1f}/5</b>"
+                f"• Writing: avg <b>{avg:.1f}/5</b>"
                 + (f" · last {last}/5 ({last_type})" if last is not None else "")
             )
-
         spk_stats = svc.repo.speaking_scores(user)
         if spk_stats["count"]:
             savg = spk_stats["avg"] or 0.0
             slast = spk_stats["last"]
             sscaled = spk_stats["last_scaled"]
             parts.append(
-                f"• Speaking score: avg <b>{savg:.1f}/4</b>"
+                f"• Speaking: avg <b>{savg:.1f}/4</b>"
                 + (f" · last {slast}/4 (~{sscaled}/30)" if slast is not None else "")
             )
 
+        # --- Quiz accuracy trend (last 4 weeks) ---
+        accuracy = svc.repo.quiz_accuracy_by_week(user, weeks=4)
+        if accuracy:
+            trend = ""
+            if len(accuracy) >= 2:
+                diff = accuracy[-1]["pct"] - accuracy[-2]["pct"]
+                trend = " ↑" if diff > 0 else (" ↓" if diff < 0 else " →")
+            week_strs = [
+                f"{r['week']} {round(r['pct'])}%"
+                + f" ({r['correct']}/{r['total']})"
+                for r in accuracy
+            ]
+            parts.append("\n<b>📈 Quiz accuracy:</b>" + trend)
+            parts.append("  " + " · ".join(week_strs))
+
+        # --- Error trend ---
+        errors_by_week = svc.repo.error_count_by_week(user, weeks=4)
+        if errors_by_week:
+            trend = ""
+            if len(errors_by_week) >= 2:
+                diff = errors_by_week[-1]["count"] - errors_by_week[-2]["count"]
+                trend = " ↑" if diff > 0 else (" ↓" if diff < 0 else " →")
+            week_strs = [f"{r['week']} {r['count']} err" for r in errors_by_week]
+            parts.append("\n<b>⚠️ Error trend:</b>" + trend)
+            parts.append("  " + " · ".join(week_strs))
+
+        # --- Recurring errors ---
         if top_errors:
             lines = [
-                f'  • "{e["error_text"]}" → "{e["correction"]}" ({e["count"]}x)' for e in top_errors
+                f'  • "{e["error_text"]}" → "{e["correction"]}" ({e["count"]}x)'
+                for e in top_errors
             ]
             parts.append("\n<b>🔄 Recurring errors:</b>\n" + "\n".join(lines))
 
+        # --- Topics ---
         if weak:
-            parts.append("\n<b>📉 Weakest topics:</b>")
+            parts.append("\n<b>📉 Focus areas:</b>")
             for t in weak:
                 pct = round(t["avg_score"] * 100)
-                parts.append(f"  • {t['topic']}: {pct}% ({t['count']} attempts)")
-
+                parts.append(
+                    f"  • {t['topic']}: {pct}% ({t['count']}x)"
+                )
         if strong:
             parts.append("\n<b>📈 Strongest topics:</b>")
             for t in strong:
                 pct = round(t["avg_score"] * 100)
-                parts.append(f"  • {t['topic']}: {pct}% ({t['count']} attempts)")
+                parts.append(
+                    f"  • {t['topic']}: {pct}% ({t['count']}x)"
+                )
 
-        parts.append("\n\nReview your cards in the Anki app 📚")
+        parts.append("\nReview your cards in the Anki app 📚")
         await message.answer("\n".join(parts))
 
     @router.message(Command("reset"))
@@ -431,23 +436,19 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
             reset_confirm(),
         )
 
-    @router.message(Command("worksheet"))
-    async def on_worksheet(message: Message) -> None:
-        """Generate an evening practice worksheet on demand."""
-        from tutor.scheduler.jobs import evening_worksheet
+    @router.message(Command("daily"))
+    async def on_daily(message: Message) -> None:
+        """Build and send today's single TOEFL file on demand (reading + listening + vocab)."""
+        from tutor.worksheet.daily_file import send_daily_file
 
         user = message.from_user.id
-        await message.answer("📝 Generating your worksheet...")
-        await evening_worksheet(svc, user)
-
-    @router.message(Command("homework"))
-    async def on_homework(message: Message) -> None:
-        """Generate today's homework: reading + listening + exercises as a file."""
-        from tutor.scheduler.jobs import homework_push
-
-        user = message.from_user.id
-        await message.answer("📝 Generating your homework...")
-        await homework_push(svc, user)
+        # Use today's delivered items (or the most recent delivered) for the file.
+        delivered = svc.repo.fetch_by_status(user, DeliveryStatus.DELIVERED, limit=10)
+        if not delivered:
+            await message.answer("No material yet — use /start or /next first.")
+            return
+        await message.answer("📝 Building your daily TOEFL file...")
+        await send_daily_file(svc, user, [it.id for it in delivered])
 
     # ---- callbacks ----
     @router.callback_query(F.data.startswith("discuss:"))
@@ -482,11 +483,10 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         else:
             await svc.notifier.send(cb.from_user.id, "Reset cancelled. Your progress is safe. 👍")
 
-    # ---- document submission (task file or worksheet answers) ----
+    # ---- document submission (daily TOEFL file or essay) ----
     @router.message(F.document)
     async def on_document(message: Message) -> None:
-        """Handle a submitted .md file: route to task grader or worksheet grader."""
-        import re
+        """Handle a submitted .md/.txt file: route to the daily TOEFL grader."""
 
         user = message.from_user.id
         doc = message.document
@@ -505,40 +505,31 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         file_bytes = await bot.download_file(tg_file.file_path)
         text = file_bytes.decode("utf-8", errors="replace")
 
-        # Route: per-item task file vs daily worksheet.
-        task_match = re.search(r"<!--\s*TASK_ID:\s*(\d+)\s*-->", text)
-        if task_match:
-            await _grade_task_file(svc, message, int(task_match.group(1)), text)
+        # Essay submission (file-based /write) — routed by its marker.
+        essay_match = re.search(r"<!--\s*ESSAY_TASK_ID:\s*(\d+)\s*-->", text)
+        if essay_match:
+            await grade_essay_file(svc, message, int(essay_match.group(1)), text)
             return
 
-        # Daily worksheet flow.
-        from tutor.worksheet.generator import worksheet_from_json
-        from tutor.worksheet.grader import grade_worksheet
-        from tutor.worksheet.parser import parse_worksheet_answers
+        # Daily TOEFL file: find the latest pending worksheet for this user.
+        from tutor.worksheet.daily_file import daily_from_json, grade_daily
 
         worksheet = svc.repo.get_latest_worksheet(user, status="pending")
         if worksheet is None:
             worksheet = svc.repo.get_latest_worksheet(user, status="submitted")
         if worksheet is None:
             await message.answer(
-                "No pending worksheet found. Wait for the evening worksheet "
-                "or use /worksheet to generate one."
+                "No pending daily file found. Wait for the morning push or use /daily."
             )
             return
 
-        answers = parse_worksheet_answers(text)
         svc.repo.update_worksheet_answers(worksheet["id"], text)
-        payload = worksheet_from_json(worksheet["items_json"])
-        score, feedback = await grade_worksheet(svc.llm, payload, answers)
+        payload = daily_from_json(worksheet["items_json"])
+        score, feedback = await grade_daily(svc, user, payload, text)
         svc.repo.update_worksheet_grade(worksheet["id"], score, feedback)
         await message.answer(feedback)
 
     # ---- in-session messages (registered last so commands win) ----
-    @router.message(ConversationState.essay, F.text)
-    async def on_essay_text(message: Message, state: FSMContext) -> None:
-        """Handle essay submission: user sends text while in essay mode."""
-        await submit_essay(svc, message.from_user.id, state, message.text or "")
-
     @router.message(SpeakingState.active, F.voice)
     async def on_speaking_voice(message: Message, state: FSMContext) -> None:
         if bot is None:

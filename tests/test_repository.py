@@ -207,3 +207,82 @@ def test_get_quiz_auto_returns_listening_for_podcast(repo):
     quiz = repo.get_quiz_auto(cid)
     assert quiz is not None
     assert quiz.kind == QuizKind.LISTENING
+
+
+def test_quiz_accuracy_by_week(repo, sample_raw):
+    """Insert attempts across two weeks and check per-week aggregation."""
+    cid = repo.add_content(sample_raw(), user_id=764315256)
+    assert cid is not None
+    questions = [
+        QuizQuestion(prompt="Q1", options=["A", "B"], correct_index=0, explanation=""),
+    ]
+    repo.save_quiz(cid, QuizKind.READING, questions)
+    qid = questions[0].id
+    assert qid is not None
+
+    # Insert attempts with explicit timestamps (this week + last week).
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    last_week = now - timedelta(days=8)
+    repo.conn.execute(
+        "INSERT INTO attempt (quiz_question_id, user_id, chosen_index, is_correct, answered_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (qid, 764315256, 0, 1, last_week.isoformat()),
+    )
+    repo.conn.execute(
+        "INSERT INTO attempt (quiz_question_id, user_id, chosen_index, is_correct, answered_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (qid, 764315256, 0, 1, now.isoformat()),
+    )
+    repo.conn.execute(
+        "INSERT INTO attempt (quiz_question_id, user_id, chosen_index, is_correct, answered_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (qid, 764315256, 1, 0, now.isoformat()),
+    )
+    repo.conn.commit()
+
+    result = repo.quiz_accuracy_by_week(764315256, weeks=2)
+    assert len(result) >= 1
+    latest = result[-1]
+    assert latest["total"] >= 1
+    assert 0.0 <= latest["pct"] <= 100.0
+
+
+def test_error_count_by_week(repo):
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    last_week = now - timedelta(days=8)
+    repo.save_session_errors(
+        764315256,
+        "speak",
+        [
+            {"type": "grammar", "error": "I go", "correction": "I went"},
+            {"type": "vocab", "error": "bigly", "correction": "greatly"},
+        ],
+    )
+    # Override one error's timestamp to the previous week.
+    repo.conn.execute(
+        "UPDATE session_error SET created_at = ? WHERE error_text = ?",
+        (last_week.isoformat(), "bigly"),
+    )
+    repo.conn.commit()
+
+    result = repo.error_count_by_week(764315256, weeks=2)
+    assert len(result) >= 1
+    total_errors = sum(r["count"] for r in result)
+    assert total_errors >= 2
+
+
+def test_vocab_seen_count(repo, sample_raw):
+    cid = repo.add_content(sample_raw(), user_id=764315256)
+    assert cid is not None
+    repo.save_vocab(
+        cid,
+        [
+            VocabItem(content_id=cid, word="ephemeral", definition="short-lived"),
+            VocabItem(content_id=cid, word="ubiquitous", definition="everywhere"),
+        ],
+    )
+    assert repo.vocab_seen_count(764315256) == 2
