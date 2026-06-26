@@ -43,7 +43,7 @@ class MiMoLLMClient:
             "system": system,
             "messages": [{"role": "user", "content": user}],
         }
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(timeout=300) as client:
             resp = await client.post(url, headers=headers, json=body)
             resp.raise_for_status()
         data = resp.json()
