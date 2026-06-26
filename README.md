@@ -3,11 +3,15 @@
 Autonomous, self-hosted **TOEFL preparation assistant** for Telegram. It turns
 daily content consumption into an active learning loop:
 
-- **Morning** — delivers articles scraped from your Telegram channels and
-  podcasts pulled from RSS.
-- **Evening** — runs interactive TOEFL-style evaluation: reading-comprehension
-  quizzes + vocabulary checks on the exact words from the day's text.
-- **Always** — auto-generates Anki cards from what you got wrong.
+- **Morning** — delivers articles and podcasts, each with a words+idioms Anki
+  deck. A single **daily TOEFL file** is sent alongside: one self-contained
+  Markdown file with a Reading passage, Listening questions (audio attached),
+  and Vocabulary exercises. Fill in your answers and send the file back.
+- **Evening** — the bot nudges you to complete the daily file and practice
+  Speaking (`/speaking`, 4 official task types, scored 0-4) and Writing (`/write`,
+  essay task file, scored 0-5 with rubric feedback).
+- **Always** — Anki cards auto-generated from missed words; `/progress` shows
+  streak, accuracy trends, weak topics, and recurring errors.
 
 ## Architecture (two planes)
 
@@ -20,7 +24,6 @@ with a stub + real implementation, swapped via a one-line `.env` change, so the
 **entire loop runs offline on stubs**.
 
 Deployment is via GitHub Actions (CI + SSH deploy) — see [docs/DEPLOY.md](docs/DEPLOY.md).
-The optional Hermes voice/chat plane is documented in [docs/HERMES.md](docs/HERMES.md).
 
 ## Quickstart (offline, no secrets)
 
@@ -35,14 +38,28 @@ uv run tutor --help           # CLI: bot | scheduler | scrape | ingest | llm-smo
 ```bash
 uv sync --extra scrape        # adds Telethon for channel scraping
 # fill .env: BOT_TOKEN, TG_API_ID, TG_API_HASH, LLM_BACKEND=ollama
-uv run tutor scrape           # pull articles from your channels
+uv run tutor scrape           # pull text articles from your Telegram channels
 uv run tutor ingest           # pull today's podcasts (RSS)
 uv run tutor llm-smoke        # verify Ollama returns valid quiz JSON
 uv run tutor bot              # run the bot + embedded scheduler
 ```
 
-Bot commands: `/start` (deliver a reading + quiz), `/next` (next reading),
-`/coach <text>` (free-form practice), or send a voice message.
+## Bot commands
+
+| Command | What it does |
+|---------|--------------|
+| `/start` | Register and deliver today's first reading/episode |
+| `/next` | Deliver the next reading or episode |
+| `/daily` | Get today's TOEFL file (Reading + Listening + Vocab) |
+| `/speaking` | Strict TOEFL Speaking: 4 task types, timed, scored 0-4 |
+| `/write` | TOEFL writing task file (essay, graded 0-5) |
+| `/speak` | Free-form spoken practice (voice or text) |
+| `/coach` | Adaptive coaching session |
+| `/review` | Evening grammar/vocabulary/comprehension review |
+| `/cards` | Today's Anki cards (`more` for extra, `all` for full deck) |
+| `/progress` | Stats: streak, accuracy trends, weak topics, vocab |
+| `/reset` | Wipe all progress and start fresh |
+| `/help` | Show all commands and the daily-loop guide |
 
 ## Configuration
 
@@ -61,19 +78,18 @@ keys only as you enable each real backend:
 > **Secrets:** `.env`, `bot_data/` (Telegram sessions) and `data/` are
 > git-ignored. Never commit them.
 
+## Content sources
+
+Articles are fetched from **The Guardian Open Platform** (curated, TOEFL-scale
+length) and **Telegram channels** (text posts only — PDF/EPUB/FB2 magazines are
+no longer parsed to avoid oversized content). Podcasts come from a hand-picked
+RSS catalog: NPR Short Wave, The Indicator, TED Tech, Planet Money, BBC 6 Minute
+English, and more.
+
 ## Status
 
-Feature-complete (M0–M9), built bottom-up in tiny, individually tested
-milestones:
+Feature-complete (M0–M9), with a consolidated daily-file loop, file-based
+Speaking and Writing flows, and a dynamic progress dashboard with weekly trends.
 
-- **M0–M2** secret hygiene, config + state-machine repo, offline loop on stubs
-- **M3** live Telegram scrape (Telethon) + interactive quiz bot
-- **M4** real `glm-5:cloud` TOEFL questions
-- **M5** scheduler (morning push + evening eval)
-- **M6** podcasts (RSS) with cadence + lazy transcription
-- **M7** native `SOUL.md` persona + per-user recall memory
-- **M8** optional, sealed Hermes voice/chat plane
-- **M9** CI/CD (GitHub Actions) deploy to the VPS
-
-51 tests, lint-clean. Channel scrape, podcast feeds, and the LLM are all
-live-validated.
+51+ tests, lint-clean. All loops run offline on stubs; live-validated with real
+LLM, TTS, and Telegram integrations.

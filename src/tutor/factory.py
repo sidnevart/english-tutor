@@ -27,6 +27,12 @@ def build_llm(settings: Settings) -> LLMClient:
             from tutor.adapters.llm.hermes import build_hermes_client
 
             return build_hermes_client(settings)
+        case "mimo":
+            from tutor.adapters.llm.mimo import MiMoLLMClient
+
+            return MiMoLLMClient(
+                settings.mimo_base_url, settings.mimo_api_key, settings.mimo_model
+            )
         case _:
             from tutor.adapters.llm.stub import StubLLMClient
 

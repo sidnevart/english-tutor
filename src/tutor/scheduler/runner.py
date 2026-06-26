@@ -10,7 +10,6 @@ from tutor.scheduler.jobs import (
     daytime_checkin,
     essay_reminder,
     evening_reminder,
-    evening_worksheet,
     morning_push,
     refresh_content,
     weekly_summary,
@@ -56,14 +55,6 @@ def build_scheduler(svc: Services, user_id: int) -> AsyncIOScheduler:
         CronTrigger.from_crontab(svc.settings.evening_cron, timezone=tz),
         args=[svc, user_id],
         id="evening_reminder",
-        replace_existing=True,
-    )
-    # Worksheet runs 5 min after the evening reminder.
-    scheduler.add_job(
-        evening_worksheet,
-        CronTrigger.from_crontab("5 20 * * *", timezone=tz),
-        args=[svc, user_id],
-        id="evening_worksheet",
         replace_existing=True,
     )
     scheduler.add_job(

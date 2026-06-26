@@ -14,7 +14,6 @@ from typing import Any
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-from tutor.eval.essay import evaluate_essay, generate_essay_prompt, next_essay_type
 from tutor.eval.schemas import SessionFeedbackPayload
 from tutor.factory import Services
 from tutor.memory import Memory
@@ -41,7 +40,6 @@ _ANTI_INJECTION = (
 
 class ConversationState(StatesGroup):
     active = State()
-    essay = State()  # waiting for essay submission
 
 
 def _speak_instructions(errors_hint: str = "") -> str:
@@ -110,6 +108,32 @@ async def _say(svc: Services, bot: Any, user_id: int, text: str) -> None:
         await bot.send_voice(user_id, FSInputFile(str(path)))
     except Exception:  # noqa: BLE001 — text already delivered; voice is best-effort
         pass
+
+
+async def _say_audio_only(
+    svc: Services, bot: Any, user_id: int, text: str, caption: str = "🎧 Listen to the audio"
+) -> None:
+    """Send a TTS voice note WITHOUT the transcript text — exam-style listening
+    (on the real exam the listening part is audio-only, never shown as text).
+
+    On a stub/no-TTS setup there is no audio, so fall back to the transcript so
+    the task stays doable offline; the fallback is clearly labelled.
+    """
+    if not svc.settings.voice_enabled or bot is None:
+        await svc.notifier.send(
+            user_id, f"🎧 <i>(audio unavailable — transcript shown)</i>\n{text}"
+        )
+        return
+    try:
+        from aiogram.types import FSInputFile
+
+        out = Path(svc.settings.data_path) / f"tts_{user_id}_listen.ogg"
+        path = await svc.synthesizer.synthesize(text, out)
+        await bot.send_voice(user_id, FSInputFile(str(path)), caption=caption)
+    except Exception:  # noqa: BLE001 — TTS failed; degrade to text so the learner isn't stuck
+        await svc.notifier.send(
+            user_id, f"🎧 <i>(audio failed — transcript shown)</i>\n{text}"
+        )
 
 
 async def download_voice(bot: Any, svc: Services, message: Any) -> str:
@@ -223,149 +247,6 @@ async def handle_turn(
     history.append({"role": "coach", "content": reply})
     await state.update_data(history=history[-_MAX_TURNS * 2 :])
     await _say(svc, bot, user_id, reply)
-
-
-async def start_essay(svc: Services, bot: Any, user_id: int, state: FSMContext) -> None:
-    """Start a TOEFL essay writing session: generate prompt, wait for submission."""
-    last_type = svc.repo.last_essay_type(user_id)
-    essay_type = next_essay_type(last_type)
-
-    try:
-        prompt_data = await generate_essay_prompt(svc.llm, essay_type)
-    except Exception:  # noqa: BLE001
-        await svc.notifier.send(user_id, "Couldn't generate a writing prompt. Try again later.")
-        return
-
-    prompt_text = prompt_data["prompt"]
-    passage = prompt_data.get("passage", "")
-    lecture = prompt_data.get("lecture", "")
-
-    await state.set_state(ConversationState.essay)
-    await state.update_data(
-        essay_type=essay_type,
-        essay_prompt=prompt_text,
-        essay_passage=passage,
-        essay_lecture=lecture,
-    )
-
-    header = f"📝 <b>TOEFL Writing — {essay_type.title()}</b>\n\n"
-    if passage:
-        await svc.notifier.send(user_id, header + f"<b>Read the passage:</b>\n{passage}")
-    if lecture:
-        # Deliver the lecture as text and (best-effort) as a voice note — the
-        # integrated task requires listening, mirroring the real exam.
-        await _say(svc, bot, user_id, f"🎧 <b>Now listen to the lecture:</b>\n{lecture}")
-    if passage or lecture:
-        await svc.notifier.send(
-            user_id,
-            f"<b>Writing task:</b>\n{prompt_text}\n\n"
-            "Write your response as a text message. Send /stop to cancel.",
-        )
-    else:
-        await svc.notifier.send(
-            user_id,
-            header + f"<b>Task:</b>\n{prompt_text}\n\n"
-            "Write your essay as a text message. Send /stop to cancel.",
-        )
-
-
-async def submit_essay(svc: Services, user_id: int, state: FSMContext, essay_text: str) -> None:
-    """Evaluate a submitted essay and send feedback."""
-    data = await state.get_data()
-    essay_type = data.get("essay_type", "independent")
-    prompt = data.get("essay_prompt", "")
-    passage = data.get("essay_passage", "")
-    lecture = data.get("essay_lecture", "")
-    await state.clear()
-
-    if len(essay_text.strip()) < 50:
-        await svc.notifier.send(
-            user_id,
-            "Your essay is too short for meaningful feedback. "
-            "Try to write at least 100 words. Use /write to start again.",
-        )
-        return
-
-    await svc.notifier.send(user_id, "⏳ Evaluating your essay...")
-
-    try:
-        eval_result = await evaluate_essay(
-            svc.llm, prompt, essay_text, essay_type, passage=passage, lecture=lecture
-        )
-
-        # Persist to DB.
-        corrections_text = (
-            "\n".join(f"- {c.error} → {c.correction}" for c in eval_result.corrections)
-            if eval_result.corrections
-            else ""
-        )
-        feedback_summary = (
-            f"Score: {eval_result.score}/5 (~{eval_result.scaled_30}/30)\n"
-            f"Strengths: {', '.join(eval_result.strengths)}\n"
-            f"Weaknesses: {', '.join(eval_result.weaknesses)}\n"
-            f"Corrections:\n{corrections_text}\n"
-            f"Suggestions: {', '.join(eval_result.suggestions)}"
-        )
-        svc.repo.save_essay(
-            user_id,
-            prompt,
-            essay_text,
-            eval_result.score,
-            feedback_summary,
-            essay_type,
-        )
-
-        # Also persist corrections as session errors for tracking.
-        if eval_result.corrections:
-            svc.repo.save_session_errors(
-                user_id,
-                f"essay:{essay_type}",
-                [
-                    {
-                        "type": c.type,
-                        "error": c.error,
-                        "correction": c.correction,
-                        "context": prompt[:100],
-                    }
-                    for c in eval_result.corrections
-                ],
-            )
-
-        # Build human-readable feedback.
-        score_emoji = {5: "🎉", 4: "👍", 3: "📝", 2: "📚", 1: "💪", 0: "💪"}.get(
-            eval_result.score, "📝"
-        )
-        parts = [
-            f"{score_emoji} <b>Essay Score: {eval_result.score}/5</b> "
-            f"(~{eval_result.scaled_30}/30 scaled)\n",
-        ]
-        if eval_result.strengths:
-            parts.append("<b>Strengths:</b>")
-            for s in eval_result.strengths:
-                parts.append(f"  ✅ {s}")
-        if eval_result.weaknesses:
-            parts.append("\n<b>Areas to improve:</b>")
-            for w in eval_result.weaknesses:
-                parts.append(f"  ⚠️ {w}")
-        if eval_result.corrections:
-            parts.append(f"\n<b>Corrections ({len(eval_result.corrections)}):</b>")
-            for c in eval_result.corrections[:5]:  # cap at 5 to avoid message flood
-                parts.append(f"  ❌ <i>{c.error}</i> → <b>{c.correction}</b>")
-            if len(eval_result.corrections) > 5:
-                parts.append(f"  ... and {len(eval_result.corrections) - 5} more")
-        if eval_result.suggestions:
-            parts.append("\n<b>Suggestions:</b>")
-            for s in eval_result.suggestions:
-                parts.append(f"  💡 {s}")
-
-        await svc.notifier.send(user_id, "\n".join(parts))
-
-    except Exception as exc:  # noqa: BLE001
-        await svc.notifier.send(
-            user_id,
-            f"Couldn't evaluate your essay: {str(exc)[:100]}. "
-            "Your text has been saved — try /write again later.",
-        )
 
 
 async def end_session(svc: Services, user_id: int, state: FSMContext) -> None:
