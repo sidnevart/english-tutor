@@ -255,10 +255,7 @@ async def weekly_summary(svc: Services, user_id: int) -> None:
             if len(accuracy) >= 2:
                 diff = accuracy[-1]["pct"] - accuracy[-2]["pct"]
                 trend = " ↑" if diff > 0 else (" ↓" if diff < 0 else " →")
-            week_strs = [
-                f"{r['week']} {round(r['pct'])}%"
-                for r in accuracy
-            ]
+            week_strs = [f"{r['week']} {round(r['pct'])}%" for r in accuracy]
             parts.append("\n<b>📈 Quiz accuracy:</b>" + trend)
             parts.append("  " + " · ".join(week_strs))
 
@@ -288,9 +285,7 @@ async def weekly_summary(svc: Services, user_id: int) -> None:
         if top_errors:
             parts.append("\n<b>🔄 Top recurring errors:</b>")
             for e in top_errors:
-                parts.append(
-                    f'  • "{e["error_text"]}" → "{e["correction"]}" ({e["count"]}x)'
-                )
+                parts.append(f'  • "{e["error_text"]}" → "{e["correction"]}" ({e["count"]}x)')
 
         # LLM-generated recommendations.
         try:

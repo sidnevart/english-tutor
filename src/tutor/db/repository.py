@@ -618,9 +618,7 @@ class Repository:
         ).fetchall()
         return {r["content_type"]: int(r["c"]) for r in rows}
 
-    def quiz_accuracy_by_week(
-        self, user_id: int, weeks: int = 4
-    ) -> list[dict[str, object]]:
+    def quiz_accuracy_by_week(self, user_id: int, weeks: int = 4) -> list[dict[str, object]]:
         """Return per-week quiz accuracy (last N weeks). Each entry has
         week (ISO year-week), correct, total, and pct (0.0-100.0)."""
         from datetime import timedelta
@@ -650,9 +648,7 @@ class Repository:
             for r in rows
         ]
 
-    def error_count_by_week(
-        self, user_id: int, weeks: int = 4
-    ) -> list[dict[str, object]]:
+    def error_count_by_week(self, user_id: int, weeks: int = 4) -> list[dict[str, object]]:
         """Return per-week error count (last N weeks)."""
         from datetime import timedelta
 
@@ -845,15 +841,11 @@ class Repository:
         return int(cur.lastrowid)
 
     def get_writing_task(self, task_id: int) -> dict | None:
-        row = self.conn.execute(
-            "SELECT * FROM writing_task WHERE id = ?", (task_id,)
-        ).fetchone()
+        row = self.conn.execute("SELECT * FROM writing_task WHERE id = ?", (task_id,)).fetchone()
         return dict(row) if row else None
 
     def mark_writing_task_submitted(self, task_id: int) -> None:
-        self.conn.execute(
-            "UPDATE writing_task SET status = 'submitted' WHERE id = ?", (task_id,)
-        )
+        self.conn.execute("UPDATE writing_task SET status = 'submitted' WHERE id = ?", (task_id,))
         self.conn.commit()
 
     # ---- worksheets --------------------------------------------------------

@@ -27,14 +27,16 @@ class FallbackLLMClient:
         try:
             return await self._primary.complete(system, user)
         except Exception as exc:
-            _log.warning("Primary LLM failed (%s), falling back to secondary: %s",
-                         type(exc).__name__, exc)
+            _log.warning(
+                "Primary LLM failed (%s), falling back to secondary: %s", type(exc).__name__, exc
+            )
             return await self._fallback.complete(system, user)
 
     async def complete_json[T: BaseModel](self, system: str, user: str, schema: type[T]) -> T:
         try:
             return await self._primary.complete_json(system, user, schema)
         except Exception as exc:
-            _log.warning("Primary LLM failed (%s), falling back to secondary: %s",
-                         type(exc).__name__, exc)
+            _log.warning(
+                "Primary LLM failed (%s), falling back to secondary: %s", type(exc).__name__, exc
+            )
             return await self._fallback.complete_json(system, user, schema)

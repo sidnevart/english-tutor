@@ -131,9 +131,7 @@ async def _say_audio_only(
         path = await svc.synthesizer.synthesize(text, out)
         await bot.send_voice(user_id, FSInputFile(str(path)), caption=caption)
     except Exception:  # noqa: BLE001 — TTS failed; degrade to text so the learner isn't stuck
-        await svc.notifier.send(
-            user_id, f"🎧 <i>(audio failed — transcript shown)</i>\n{text}"
-        )
+        await svc.notifier.send(user_id, f"🎧 <i>(audio failed — transcript shown)</i>\n{text}")
 
 
 async def download_voice(bot: Any, svc: Services, message: Any) -> str:
