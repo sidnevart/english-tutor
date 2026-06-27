@@ -64,7 +64,7 @@ def _extract_essay(text: str) -> str:
     idx = text.find(_ESSAY_HEADING)
     if idx == -1:
         return text  # whole file as a fallback
-    body = text[idx + len(_ESSAY_HEADING):]
+    body = text[idx + len(_ESSAY_HEADING) :]
     # Drop an optional HTML comment hint line right after the heading.
     body = body.lstrip("\n")
     if body.lstrip().startswith("<!--"):
@@ -141,9 +141,7 @@ async def grade_essay_file(svc: Services, message: Message, task_id: int, text: 
         return
 
     corrections_text = (
-        "\n".join(f"- {c.error} → {c.correction}" for c in ev.corrections)
-        if ev.corrections
-        else ""
+        "\n".join(f"- {c.error} → {c.correction}" for c in ev.corrections) if ev.corrections else ""
     )
     feedback_summary = (
         f"Score: {ev.score}/5 (~{ev.scaled_30}/30)\n"

@@ -373,8 +373,7 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
                 diff = accuracy[-1]["pct"] - accuracy[-2]["pct"]
                 trend = " ↑" if diff > 0 else (" ↓" if diff < 0 else " →")
             week_strs = [
-                f"{r['week']} {round(r['pct'])}%"
-                + f" ({r['correct']}/{r['total']})"
+                f"{r['week']} {round(r['pct'])}%" + f" ({r['correct']}/{r['total']})"
                 for r in accuracy
             ]
             parts.append("\n<b>📈 Quiz accuracy:</b>" + trend)
@@ -394,8 +393,7 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         # --- Recurring errors ---
         if top_errors:
             lines = [
-                f'  • "{e["error_text"]}" → "{e["correction"]}" ({e["count"]}x)'
-                for e in top_errors
+                f'  • "{e["error_text"]}" → "{e["correction"]}" ({e["count"]}x)' for e in top_errors
             ]
             parts.append("\n<b>🔄 Recurring errors:</b>\n" + "\n".join(lines))
 
@@ -404,16 +402,12 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
             parts.append("\n<b>📉 Focus areas:</b>")
             for t in weak:
                 pct = round(t["avg_score"] * 100)
-                parts.append(
-                    f"  • {t['topic']}: {pct}% ({t['count']}x)"
-                )
+                parts.append(f"  • {t['topic']}: {pct}% ({t['count']}x)")
         if strong:
             parts.append("\n<b>📈 Strongest topics:</b>")
             for t in strong:
                 pct = round(t["avg_score"] * 100)
-                parts.append(
-                    f"  • {t['topic']}: {pct}% ({t['count']}x)"
-                )
+                parts.append(f"  • {t['topic']}: {pct}% ({t['count']}x)")
 
         parts.append("\nReview your cards in the Anki app 📚")
         await message.answer("\n".join(parts))

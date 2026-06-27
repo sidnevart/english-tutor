@@ -485,9 +485,7 @@ async def send_daily_file(svc: Services, user_id: int, content_ids: list[int]) -
             continue
         audio = await _resolve_delivery_audio(svc, content)
         if audio is not None and audio.exists():
-            await svc.notifier.send_file(
-                user_id, audio, caption=f"🎧 Listen: {block.title}"
-            )
+            await svc.notifier.send_file(user_id, audio, caption=f"🎧 Listen: {block.title}")
 
     svc.repo.log_job(
         "daily_file",
