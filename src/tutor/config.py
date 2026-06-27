@@ -14,7 +14,7 @@ from typing import Literal
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-LLMBackend = Literal["stub", "ollama", "hermes", "mimo"]
+LLMBackend = Literal["stub", "ollama", "hermes", "mimo", "ollama_mimo"]
 STTBackend = Literal["stub", "whisper", "cloud"]
 TTSBackend = Literal["stub", "groq", "edge", "openai", "cloud"]
 AnkiBackend = Literal["genanki", "ankiconnect", "null"]

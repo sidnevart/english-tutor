@@ -33,6 +33,18 @@ def build_llm(settings: Settings) -> LLMClient:
             return MiMoLLMClient(
                 settings.mimo_base_url, settings.mimo_api_key, settings.mimo_model
             )
+        case "ollama_mimo":
+            from tutor.adapters.llm.fallback import FallbackLLMClient
+            from tutor.adapters.llm.mimo import MiMoLLMClient
+            from tutor.adapters.llm.ollama import OllamaLLMClient
+
+            primary = OllamaLLMClient(
+                settings.ollama_base_url, settings.ollama_api_key, settings.ollama_model
+            )
+            fallback = MiMoLLMClient(
+                settings.mimo_base_url, settings.mimo_api_key, settings.mimo_model
+            )
+            return FallbackLLMClient(primary, fallback)
         case _:
             from tutor.adapters.llm.stub import StubLLMClient
 
