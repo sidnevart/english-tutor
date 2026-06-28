@@ -110,20 +110,31 @@ async def build_daily_payload(
     Quizzes are saved to the DB (quiz table) and vocab to the vocab table, so the
     existing grading/Anki/topic-progress machinery in `finalize_review` works when
     the learner sends the file back.
+
+    Long articles are truncated to `max_article_len` characters (~TOEFL-passage
+    scale, ~700-900 words) so the daily file stays readable and the reading time
+    estimate is honest.
     """
+    max_passage = svc.settings.max_article_len
     date = datetime.now(UTC).strftime("%Y-%m-%d")
     reading: list[DailyReadingBlock] = []
     listening: list[DailyListeningBlock] = []
 
     for art in articles:
+        # Truncate to TOEFL-passage scale for the daily file.
+        passage = art.body_text.strip()
+        if len(passage) > max_passage:
+            passage = passage[:max_passage].rsplit(" ", 1)[0] + "…"
+        # Build a temporary content item with the truncated passage so the quiz
+        # questions reference the same text the learner reads.
+        truncated = art.model_copy(update={"body_text": passage})
         n = svc.settings.reading_questions_per_item
-        questions = await build_reading_quiz(
-            svc.llm, art, n=n, recall_hint=Memory(svc.settings.soul_dir, user_id).recall_hint()
-        )
+        hint = Memory(svc.settings.soul_dir, user_id).recall_hint()
+        questions = await build_reading_quiz(svc.llm, truncated, n=n, recall_hint=hint)
         svc.repo.save_quiz(art.id, QuizKind.READING, questions)
         reading.append(
             DailyReadingBlock(
-                content_id=art.id, title=art.title or "Today's reading", passage=art.body_text
+                content_id=art.id, title=art.title or "Today's reading", passage=passage
             )
         )
         reading[-1].questions = questions
