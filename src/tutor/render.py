@@ -6,6 +6,7 @@ from tutor.domain.enums import ContentType
 from tutor.domain.models import ContentItem, QuizQuestion
 
 _PREVIEW_CHARS = 600
+_MAX_PASSAGE_CHARS = 4500  # ~700-900 words; TOEFL-passage scale
 _LETTERS = "ABCDEFGH"
 
 
@@ -19,7 +20,11 @@ def _render_article(item: ContentItem) -> str:
     title = item.title or "Today's reading"
     body = item.body_text.strip()
     preview = body[:_PREVIEW_CHARS] + ("…" if len(body) > _PREVIEW_CHARS else "")
-    word_count = len(body.split())
+    # Cap the read-time estimate at TOEFL-passage scale (~700-900 words). Long
+    # articles from old PDF scraping are truncated to this length in the daily
+    # file, so the honest reading time is based on the capped passage.
+    capped = body[:_MAX_PASSAGE_CHARS] if len(body) > _MAX_PASSAGE_CHARS else body
+    word_count = len(capped.split())
     read_min = max(1, round(word_count / 200))  # ~200 wpm average
     lines = [f"📰 <b>{title}</b> · ~{read_min} min read"]
     if item.url:
