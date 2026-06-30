@@ -18,22 +18,17 @@ from tutor.pipeline import deliver_new
 
 
 async def refresh_content(svc: Services) -> dict[str, object]:
-    """Fetch fresh content: scrape channels + ingest podcasts + Guardian articles.
+    """Fetch fresh content: Guardian articles + RSS podcasts.
 
-    Each source is isolated so a failure in one does not block the others.
-    Guardian article ingestion runs alongside Telegram scraping to guarantee
-    that articles are always available for the morning push.
+    Telegram channel scraping is disabled — TG channels send 60-page PDFs/books
+    that aren't TOEFL-scale reading material. The Guardian API (4 sections)
+    provides clean, TOEFL-scale articles. Each source is isolated so a failure
+    in one does not block the others.
     """
     from tutor.ingest.article_web import run_article_ingest
     from tutor.ingest.rss import run_ingest
-    from tutor.ingest.telegram_scraper import run_scrape
 
     result: dict[str, object] = {}
-    try:
-        result["channels"] = await run_scrape(svc.settings, svc.repo, llm=svc.llm)
-    except Exception as exc:  # noqa: BLE001
-        svc.repo.log_job("scrape", "error", str(exc)[:200])
-        result["channels"] = {}
     try:
         result["podcasts"] = await run_ingest(svc.settings, svc.repo)
     except Exception as exc:  # noqa: BLE001

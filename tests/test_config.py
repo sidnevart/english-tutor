@@ -10,7 +10,7 @@ def test_defaults_are_offline_stubs():
     assert s.llm_backend == "stub"
     assert s.notifier_backend == "stub"
     assert s.anki_backend == "genanki"
-    assert s.channel_ids == [1137165265, 1356345589]
+    assert s.channel_ids == []  # TG scraping disabled by default
 
 
 def test_loads_from_env_file(tmp_path):
