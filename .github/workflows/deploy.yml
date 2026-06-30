@@ -11,6 +11,10 @@ jobs:
   deploy:
     if: ${{ vars.DEPLOY_ENABLED == 'true' }}
     runs-on: ubuntu-latest
+    # Best-effort: a deploy failure (e.g. VPS unreachable from GitHub Actions
+    # IPs) must not fail the push — CI green is the gate; deploys retry on the
+    # next push once the server is reachable.
+    continue-on-error: true
     steps:
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.2.0
