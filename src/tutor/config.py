@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     tg_api_hash: str = ""
     tg_session_string: str = ""
     tg_session_path: str = "bot_data/telegram_e2e_session"
-    scrape_channels: str = "1137165265,1356345589"
+    scrape_channels: str = ""  # TG scraping disabled; empty = no channels
     min_article_len: int = 350  # drop blurbs/ads shorter than this when scraping
     max_article_len: int = 4500  # ~700-900 words; TOEFL-passage scale (honest read time)
     scrape_daily_limit: int = 50  # new messages to check per channel per daily run

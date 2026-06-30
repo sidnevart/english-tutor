@@ -215,13 +215,10 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         # Summarise what was added.
         pod_counts: dict[str, int] = result.get("podcasts", {}) or {}
         art_counts: dict[str, int] = result.get("articles", {}) or {}
-        ch_counts: dict[int, int] = result.get("channels", {}) or {}
         pods_new = sum(pod_counts.values())
         arts_new = sum(art_counts.values())
-        tg_new = sum(ch_counts.values())
         lines = ["✅ <b>Refresh complete</b>\n"]
         lines.append(f"📰 Articles from Guardian: <b>{arts_new}</b> new")
-        lines.append(f"📰 Articles from Telegram: <b>{tg_new}</b> new")
         lines.append(f"🎧 Podcast episodes: <b>{pods_new}</b> new")
         # Show queue breakdown.
         queue = svc.repo.count_status_by_type(user, DeliveryStatus.NEW)
@@ -232,8 +229,8 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         lines.append(f"  🎧 podcasts: <b>{podcasts_q}</b>")
         if articles_q == 0:
             lines.append(
-                "\n⚠️ No articles queued. Check that TG_API_ID/TG_API_HASH are set "
-                "and Telegram channels are reachable."
+                "\n⚠️ No articles queued. Check that the Guardian API key "
+                "(GUARDIAN_API_KEY) is set and reachable."
             )
         await message.answer("\n".join(lines))
 
