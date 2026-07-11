@@ -14,7 +14,7 @@ from __future__ import annotations
 from tutor.bot.keyboards import evening_actions
 from tutor.domain.enums import ContentType, DeliveryStatus
 from tutor.factory import Services
-from tutor.pipeline import deliver_new
+from tutor.pipeline import deliver_new, deliver_next_article_rotated
 
 
 async def refresh_content(svc: Services) -> dict[str, object]:
@@ -25,6 +25,7 @@ async def refresh_content(svc: Services) -> dict[str, object]:
     provides clean, TOEFL-scale articles. Each source is isolated so a failure
     in one does not block the others.
     """
+    from tutor.ingest.article_rss import run_article_rss_ingest
     from tutor.ingest.article_web import run_article_ingest
     from tutor.ingest.rss import run_ingest
 
@@ -39,6 +40,11 @@ async def refresh_content(svc: Services) -> dict[str, object]:
     except Exception as exc:  # noqa: BLE001
         svc.repo.log_job("article_ingest", "error", str(exc)[:200])
         result["articles"] = {}
+    try:
+        result["article_rss"] = await run_article_rss_ingest(svc.settings, svc.repo)
+    except Exception as exc:  # noqa: BLE001
+        svc.repo.log_job("article_rss", "error", str(exc)[:200])
+        result["article_rss"] = {}
     svc.repo.log_job("refresh_content", "ok", str(result)[:200])
     return result
 
@@ -51,9 +57,11 @@ async def morning_push(svc: Services, user_id: int) -> list[int]:
 
     try:
         delivered: list[int] = []
-        delivered += await deliver_new(
-            svc, user_id, svc.settings.morning_articles, ContentType.ARTICLE
-        )
+        for _ in range(svc.settings.morning_articles):
+            cid = await deliver_next_article_rotated(svc, user_id)
+            if cid is None:
+                break
+            delivered.append(cid)
         delivered += await deliver_new(
             svc, user_id, svc.settings.morning_podcasts, ContentType.PODCAST
         )

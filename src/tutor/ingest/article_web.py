@@ -52,8 +52,12 @@ async def run_article_ingest(
                 results = resp.json().get("response", {}).get("results", [])
                 for item in results:
                     body = (item.get("fields") or {}).get("bodyText", "").strip()
-                    if not (settings.min_article_len <= len(body) <= settings.max_article_len):
+                    # Drop blurbs/ads; truncate long-form pieces to TOEFL-passage
+                    # scale instead of discarding them (keeps the queue well-fed).
+                    if len(body) < settings.min_article_len:
                         continue
+                    if len(body) > settings.max_article_len:
+                        body = body[: settings.max_article_len].rsplit(" ", 1)[0]
                     published_at: datetime | None = None
                     pub_date = item.get("webPublicationDate", "")
                     if pub_date:
