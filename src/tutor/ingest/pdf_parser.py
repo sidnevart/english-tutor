@@ -134,9 +134,7 @@ async def parse_toc(pages: list[PageText], llm: LLMClient, *, toc_pages: int) ->
     return await llm.complete_json(_TOC_SYSTEM, _toc_user(head), TocPayload)
 
 
-def split_by_toc(
-    pages: list[PageText], entries: list, *, min_chars: int
-) -> list[ParsedArticle]:
+def split_by_toc(pages: list[PageText], entries: list, *, min_chars: int) -> list[ParsedArticle]:
     """Slice `pages` into articles using TOC entry start pages.
 
     Each article spans [start_page, next_entry.start_page - 1]. Entries with
@@ -191,9 +189,7 @@ def _boundary_user(pages: list[PageText]) -> str:
     return f"INPUT (per-page previews):\n{joined}\n\nReturn article boundaries."
 
 
-async def detect_boundaries(
-    pages: list[PageText], llm: LLMClient
-) -> ArticleBoundariesPayload:
+async def detect_boundaries(pages: list[PageText], llm: LLMClient) -> ArticleBoundariesPayload:
     """Ask the LLM to mark article spans from per-page previews."""
     user = _boundary_user(pages)
     return await llm.complete_json(_BOUNDARY_SYSTEM, user, ArticleBoundariesPayload)
