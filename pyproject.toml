@@ -15,6 +15,8 @@ dependencies = [
     "aiogram>=3.13",
     # content ingestion (RSS now; Telegram userbot via the `scrape` extra)
     "feedparser>=6.0.11",
+    # PDF article ingestion (user-uploaded magazines)
+    "pymupdf>=1.24",
     # scheduling
     "apscheduler>=3.10,<4",
     # LLM access (OpenAI-compatible Ollama endpoint)

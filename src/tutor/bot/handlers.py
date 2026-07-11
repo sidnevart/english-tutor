@@ -37,6 +37,8 @@ from tutor.bot.writing import grade_essay_file, start_writing_task
 from tutor.domain.enums import DeliveryStatus
 from tutor.domain.models import Card
 from tutor.factory import Services
+from tutor.ingest.pdf_parser import PdfParseError
+from tutor.ingest.pdf_upload import ingest_pdf_bytes
 from tutor.memory import Memory
 from tutor.memory.context import build_learner_context
 from tutor.pipeline import deliver_new
@@ -64,6 +66,7 @@ COMMANDS: list[tuple[str, str]] = [
     ("start", "Today's material + task file"),
     ("next", "Next reading or episode"),
     ("refresh", "Fetch new articles and podcasts now"),
+    ("pdf", "Upload a PDF magazine (parsed into articles)"),
     ("speak", "Speaking practice (voice)"),
     ("speaking", "TOEFL Speaking (timed, scored)"),
     ("stop", "End the current practice session"),
@@ -74,6 +77,7 @@ COMMANDS: list[tuple[str, str]] = [
     ("write", "TOEFL essay practice"),
     ("reset", "Reset all progress and start fresh"),
     ("daily", "Today's TOEFL file (reading + listening + vocab)"),
+    ("queue", "Articles waiting in your queue"),
     ("help", "Show available commands"),
 ]
 
@@ -103,7 +107,10 @@ HELP_TEXT = (
     "/start - register and deliver today's first reading or episode "
     "(with its words &amp; idioms Anki deck)\n"
     "/next - deliver the next reading or episode\n"
-    "/refresh - fetch new articles &amp; podcasts right now (admin only)\n\n"
+    "/refresh - fetch new articles &amp; podcasts right now (admin only)\n"
+    "/pdf - send a <b>PDF magazine</b> (New Scientist, Time, …): I parse it into "
+    "articles and queue them, ~1 delivered per day. Re-sending the same file is a no-op.\n"
+    "/queue - see what's queued, grouped by source\n\n"
     "<b>\U0001f4dd Daily file</b>\n"
     "/daily - get today's single TOEFL file: Reading passage(s) + Listening "
     "(audio attached) + Vocabulary. Fill in your answers and send the file back "
@@ -142,6 +149,29 @@ async def _coach_reply(svc: Services, user_id: int, utterance: str) -> str:
         f"Use the following learner context to personalize your response:\n\n{ctx}"
     )
     return await svc.llm.complete(system, utterance)
+
+
+def _is_pdf(message: Message) -> bool:
+    """Bearer filter: True only for a PDF document. Returning False lets the
+    message fall through to `on_document` (the .md/.txt answer grader)."""
+    doc = message.document
+    if doc is None:
+        return False
+    name = (doc.file_name or "").lower()
+    return doc.mime_type == "application/pdf" or name.endswith(".pdf")
+
+
+def _pdf_error_msg(kind: str, fname: str) -> str:
+    if kind == "encrypted":
+        return f"🔒 <b>{fname}</b> is password-protected. Remove the password and resend it."
+    if kind == "no-text":
+        return (
+            f"🖼 <b>{fname}</b> has no selectable text — it looks like scanned images. "
+            "OCR isn't supported; please send a text-based PDF."
+        )
+    if kind == "no-articles":
+        return f"🤷 Couldn't find any article-length text in <b>{fname}</b>."
+    return f"⚠️ Couldn't read <b>{fname}</b> as a PDF."
 
 
 def build_router(svc: Services, bot: object | None = None) -> Router:
@@ -441,6 +471,34 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
         await message.answer("📝 Building your daily TOEFL file...")
         await send_daily_file(svc, user, [it.id for it in delivered])
 
+    @router.message(Command("pdf"))
+    async def on_pdf_help(message: Message) -> None:
+        await message.answer(
+            "📄 <b>Upload a PDF magazine</b>\n"
+            "Just send a PDF file (New Scientist, Time, The Economist, …). I'll:\n"
+            "  • split it into articles by page / table of contents\n"
+            "  • queue them and deliver ~1 per day with a TOEFL reading task + Anki cards\n"
+            "  • skip it if you've already sent the same file\n\n"
+            "Text-based PDFs only (no scans/OCR). /queue shows what's waiting."
+        )
+
+    @router.message(Command("queue"))
+    async def on_queue(message: Message) -> None:
+        """Show NEW content grouped by source (uploaded issues, feeds, channels)."""
+        user = message.from_user.id
+        rows = svc.repo.pending_by_source(user)
+        if not rows:
+            await message.answer("📭 Queue is empty. Send a PDF (see /pdf) or wait for /refresh.")
+            return
+        total = sum(int(r["n"]) for r in rows)
+        lines = [f"📥 <b>Queue</b> — {total} item(s) waiting to be delivered:\n"]
+        for r in rows:
+            ref = str(r["source_ref"])
+            label = f"PDF issue <code>{ref}</code>" if ref.startswith("pdf:") else ref
+            lines.append(f"  • {label} — {r['n']}")
+        lines.append(f"\n📅 Delivering ~{svc.settings.morning_articles}/day at the morning push.")
+        await message.answer("\n".join(lines))
+
     # ---- callbacks ----
     @router.callback_query(F.data.startswith("discuss:"))
     async def on_discuss(cb: CallbackQuery, state: FSMContext) -> None:
@@ -473,6 +531,57 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
             )
         else:
             await svc.notifier.send(cb.from_user.id, "Reset cancelled. Your progress is safe. 👍")
+
+    # ---- PDF magazine upload (registered before on_document so PDFs win) ----
+    @router.message(_is_pdf)
+    async def on_pdf_upload(message: Message) -> None:
+        """Parse an uploaded PDF magazine into articles and queue them.
+
+        Articles are stored against the admin (the single learner) so they flow
+        into the morning drip regardless of who sent the file (admin-gated)."""
+        user = message.from_user.id
+        if user != svc.settings.admin_user_id:
+            await message.answer("Not authorised.")
+            return
+        doc = message.document
+        if doc is None:  # _is_pdf guarantees this never happens
+            return
+        fname = doc.file_name or "issue.pdf"
+        if (doc.file_size or 0) > svc.settings.pdf_max_size_mb * 1024 * 1024:
+            await message.answer(
+                f"⚠️ That PDF is too large (limit {svc.settings.pdf_max_size_mb} MB)."
+            )
+            return
+        if bot is None:
+            await message.answer("Cannot process files right now.")
+            return
+
+        await message.answer(f"📄 Parsing <b>{fname}</b>…")
+        try:
+            tg_file = await bot.get_file(doc.file_id)
+            buf = await bot.download_file(tg_file.file_path)
+            pdf_bytes = buf.getvalue() if hasattr(buf, "getvalue") else buf
+            report = await ingest_pdf_bytes(
+                svc.settings, svc.repo, svc.llm, svc.settings.admin_user_id, pdf_bytes, fname
+            )
+        except PdfParseError as exc:
+            svc.repo.log_job("pdf_upload", "error", f"{exc.kind}: {fname}")
+            await message.answer(_pdf_error_msg(exc.kind, fname))
+            return
+        except Exception as exc:  # noqa: BLE001 - download/network errors must not crash the bot
+            svc.repo.log_job("pdf_upload", "error", f"{type(exc).__name__}: {fname}")
+            await message.answer(
+                f"⚠️ Couldn't process <b>{fname}</b>. Try again or send another file."
+            )
+            return
+
+        svc.repo.log_job("pdf_upload", "ok", f"{report.issue}: +{report.stored} {fname}")
+        lines = [f"✅ <b>{report.stored}</b> article(s) queued from <b>{fname}</b>"]
+        if report.skipped_dup:
+            lines.append(f"♻️ {report.skipped_dup} already in your library (skipped)")
+        lines.append(f"📦 Issue: <code>{report.issue}</code>")
+        lines.append(f"📅 Delivering ~{svc.settings.morning_articles}/day — /queue to watch.")
+        await message.answer("\n".join(lines))
 
     # ---- document submission (daily TOEFL file or essay) ----
     @router.message(F.document)

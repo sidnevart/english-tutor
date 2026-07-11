@@ -618,6 +618,18 @@ class Repository:
         ).fetchall()
         return {r["content_type"]: int(r["c"]) for r in rows}
 
+    def pending_by_source(self, user_id: int) -> list[dict[str, object]]:
+        """Return [{source_ref, source_type, n}] counts of NEW content grouped by
+        source (channel / feed / uploaded issue), oldest issue first. Used by
+        /queue to show what is waiting to be delivered."""
+        rows = self.conn.execute(
+            "SELECT source_ref, source_type, COUNT(*) AS n FROM content_item "
+            "WHERE user_id = ? AND status = ? GROUP BY source_ref, source_type "
+            "ORDER BY MIN(fetched_at) ASC",
+            (user_id, DeliveryStatus.NEW.value),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     def quiz_accuracy_by_week(self, user_id: int, weeks: int = 4) -> list[dict[str, object]]:
         """Return per-week quiz accuracy (last N weeks). Each entry has
         week (ISO year-week), correct, total, and pct (0.0-100.0)."""

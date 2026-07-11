@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     scrape_history_batch: int = 200  # historical messages to backfill per channel per run
     pdf_max_size_mb: int = 100  # max PDF size to download (MB)
     pdf_articles_per_issue: int = 10  # max articles to extract per PDF
+    pdf_toc_pages: int = 5  # leading pages to scan for a table of contents
+    pdf_min_article_chars: int = 350  # drop pages/segments shorter than this
 
     # ---- Ollama / LLM ----
     ollama_base_url: str = "http://localhost:11434/v1"
@@ -91,9 +93,10 @@ class Settings(BaseSettings):
     morning_cron: str = "0 8 * * *"
     evening_cron: str = "0 20 * * *"
     daytime_checkin_cron: str = "0 13 * * *"  # mid-day check-in (praise + nudge)
-    morning_articles: int = 2  # how many articles to deliver each morning
-    morning_podcasts: int = 2  # how many podcasts to deliver each morning
-    essay_cron: str = "0 18 * * 3,6"  # weekly essay reminder (Wed + Sat at 18:00)
+    morning_articles: int = 1  # articles delivered each morning (~1/day TOEFL reading)
+    morning_podcasts: int = 1  # podcasts delivered each morning (~1/day listening)
+    essay_cron: str = "0 18 * * 6"  # weekly essay reminder (Saturday 18:00)
+    speaking_cron: str = "0 12 * * *"  # daily TOEFL speaking nudge (rotates 4 task types)
     weekly_summary_cron: str = "0 19 * * 0"  # weekly summary (Sunday at 19:00)
     flashcards_per_item: int = 0  # Anki cards per delivered item; 0 = unlimited (exhaustive)
     reading_questions: int = 10  # TOEFL iBT reading-set size (legacy per-item interactive)

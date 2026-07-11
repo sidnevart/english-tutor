@@ -27,6 +27,7 @@ class ContentType(StrEnum):
 class SourceType(StrEnum):
     CHANNEL = "channel"
     RSS = "rss"
+    UPLOAD = "upload"
 
 
 class Cadence(StrEnum):
