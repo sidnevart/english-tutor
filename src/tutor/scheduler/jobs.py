@@ -215,6 +215,27 @@ async def essay_reminder(svc: Services, user_id: int) -> None:
         svc.repo.log_job("essay_reminder", "error", str(exc)[:200])
 
 
+async def speaking_reminder(svc: Services, user_id: int) -> None:
+    """Daily TOEFL Speaking nudge — rotates through the four official task types
+    so the learner practices a different one each day."""
+    try:
+        last = svc.repo.last_speaking_type(user_id)
+        from tutor.eval.speaking import TASK_LABELS, next_task_type
+
+        today_type = next_task_type(last)
+        label = TASK_LABELS.get(today_type, today_type)
+        await svc.notifier.send(
+            user_id,
+            f"🎙 <b>Daily speaking practice</b>\n"
+            f"Today's task: <b>{label}</b>\n\n"
+            f"Use /speaking and pick this task for timed, scored practice (0-4). "
+            f"Covering all four types regularly is what raises your speaking score.",
+        )
+        svc.repo.log_job("speaking_reminder", "ok", f"type={today_type}")
+    except Exception as exc:  # noqa: BLE001
+        svc.repo.log_job("speaking_reminder", "error", str(exc)[:200])
+
+
 async def weekly_summary(svc: Services, user_id: int) -> None:
     """Weekly progress summary: stats, trends, topics, errors, LLM recommendations."""
     try:

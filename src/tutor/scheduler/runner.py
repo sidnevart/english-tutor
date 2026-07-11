@@ -12,6 +12,7 @@ from tutor.scheduler.jobs import (
     evening_reminder,
     morning_push,
     refresh_content,
+    speaking_reminder,
     weekly_summary,
 )
 
@@ -65,6 +66,13 @@ def build_scheduler(svc: Services, user_id: int) -> AsyncIOScheduler:
         replace_existing=True,
     )
     scheduler.add_job(
+        speaking_reminder,
+        CronTrigger.from_crontab(svc.settings.speaking_cron, timezone=tz),
+        args=[svc, user_id],
+        id="speaking_reminder",
+        replace_existing=True,
+    )
+    scheduler.add_job(
         weekly_summary,
         CronTrigger.from_crontab(svc.settings.weekly_summary_cron, timezone=tz),
         args=[svc, user_id],
@@ -84,7 +92,8 @@ def build_scheduler(svc: Services, user_id: int) -> AsyncIOScheduler:
         f"cards={cards} | crons: refresh={svc.settings.refresh_cron} "
         f"morning={svc.settings.morning_cron} daytime={svc.settings.daytime_checkin_cron} "
         f"evening={svc.settings.evening_cron} essay={svc.settings.essay_cron} "
-        f"weekly={svc.settings.weekly_summary_cron} tz={svc.settings.tz}",
+        f"speaking={svc.settings.speaking_cron} weekly={svc.settings.weekly_summary_cron} "
+        f"tz={svc.settings.tz}",
     )
 
     return scheduler

@@ -92,3 +92,34 @@ class SpeakingEvalPayload(BaseModel):
     strengths: list[str] = Field(default_factory=list)
     improvements: list[str] = Field(default_factory=list)
     feedback: str = ""
+
+
+# ---- PDF magazine parsing (user-uploaded issues) ----
+
+
+class TocEntry(BaseModel):
+    """One row of a magazine's table of contents."""
+
+    title: str
+    start_page: int = Field(ge=1)
+
+
+class TocPayload(BaseModel):
+    """Result of LLM TOC parsing. `has_toc=False` triggers the boundary fallback."""
+
+    has_toc: bool = False
+    entries: list[TocEntry] = Field(default_factory=list)
+
+
+class ArticleBoundary(BaseModel):
+    """A detected article span (inclusive page range)."""
+
+    title: str = ""
+    start_page: int = Field(ge=1)
+    end_page: int = Field(ge=1)
+
+
+class ArticleBoundariesPayload(BaseModel):
+    """Result of LLM article-boundary detection (fallback when no TOC)."""
+
+    articles: list[ArticleBoundary] = Field(default_factory=list)

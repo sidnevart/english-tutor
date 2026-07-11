@@ -7,7 +7,7 @@ from tutor.config import Settings
 from tutor.domain.enums import ContentType, SourceType
 from tutor.domain.models import RawItem
 from tutor.pipeline import deliver_new
-from tutor.scheduler.jobs import evening_reminder, morning_push
+from tutor.scheduler.jobs import evening_reminder, morning_push, speaking_reminder
 from tutor.scheduler.runner import build_scheduler
 
 
@@ -56,8 +56,8 @@ async def test_morning_push_delivers_both_types_and_logs(tmp_path):
             svc.repo.add_content(_raw(i), user)
             svc.repo.add_content(_podcast(i), user)
 
-        ids = await morning_push(svc, user)  # defaults: 2 articles + 2 podcasts
-        assert len(ids) == 4
+        ids = await morning_push(svc, user)  # defaults: 1 article + 1 podcast
+        assert len(ids) == 2
         types = {svc.repo.get(i).content_type for i in ids}
         assert types == {ContentType.ARTICLE, ContentType.PODCAST}
 
@@ -82,6 +82,18 @@ async def test_evening_reminder_nudges_anki(tmp_path):
         assert any(r["job"] == "evening_reminder" for r in logs)
 
 
+async def test_speaking_reminder_nudges_rotating_type(tmp_path):
+    with open_services(_settings(tmp_path)) as svc:
+        await speaking_reminder(svc, svc.settings.admin_user_id)
+        last = svc.notifier.messages[-1]  # type: ignore[attr-defined]
+        assert "speaking" in last.text.lower()
+        # No prior attempt -> the rotation starts at the first type (independent).
+        assert "independent" in last.text.lower()
+
+        logs = svc.repo.conn.execute("SELECT job FROM schedule_log").fetchall()
+        assert any(r["job"] == "speaking_reminder" for r in logs)
+
+
 async def test_build_scheduler_registers_jobs(tmp_path):
     with open_services(_settings(tmp_path)) as svc:
         scheduler = build_scheduler(svc, svc.settings.admin_user_id)
@@ -91,5 +103,6 @@ async def test_build_scheduler_registers_jobs(tmp_path):
             "daytime_checkin",
             "evening_reminder",
             "essay_reminder",
+            "speaking_reminder",
             "weekly_summary",
         }
