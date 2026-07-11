@@ -94,6 +94,34 @@ async def test_speaking_reminder_nudges_rotating_type(tmp_path):
         assert any(r["job"] == "speaking_reminder" for r in logs)
 
 
+async def test_article_delivery_rotates_sources(tmp_path):
+    from tutor.pipeline import deliver_next_article_rotated
+
+    def art(source_ref: str, eid: str) -> RawItem:
+        return RawItem(
+            source_type=SourceType.RSS,
+            source_ref=source_ref,
+            external_id=eid,
+            content_type=ContentType.ARTICLE,
+            title=f"Article {eid}",
+            body_text=f"Distinct {eid} reading passage about science, ideas, and discovery.",
+        )
+
+    with open_services(_settings(tmp_path)) as svc:
+        user = svc.settings.admin_user_id
+        # Pre-deliver a Guardian article so the "last source" is Guardian.
+        svc.repo.add_content(art("Guardian/world", "g0"), user)
+        await deliver_new(svc, user, 1)
+        # Queue one new Guardian + one new Conversation article.
+        svc.repo.add_content(art("Guardian/world", "g2"), user)
+        svc.repo.add_content(art("The Conversation", "c1"), user)
+
+        chosen = await deliver_next_article_rotated(svc, user)
+        assert chosen is not None
+        # Rotation avoids the last-delivered source (Guardian) -> picks Conversation.
+        assert svc.repo.get(chosen).source_ref == "The Conversation"
+
+
 async def test_build_scheduler_registers_jobs(tmp_path):
     with open_services(_settings(tmp_path)) as svc:
         scheduler = build_scheduler(svc, svc.settings.admin_user_id)

@@ -330,6 +330,25 @@ async def deliver_new(
     return delivered
 
 
+async def deliver_next_article_rotated(svc: Services, user_id: int) -> int | None:
+    """Deliver one NEW article, preferring a source different from the most
+    recently delivered one so the learner sees day-to-day source rotation
+    (Guardian → The Conversation → an uploaded PDF → …). Falls back to any NEW
+    article when only one source is queued. Returns the delivered id, or None."""
+    last = svc.repo.latest_delivered_content(user_id)
+    avoid = last.source_ref if last else None
+    candidates = svc.repo.fetch_by_status(
+        user_id, DeliveryStatus.NEW, limit=20, content_type=ContentType.ARTICLE
+    )
+    if not candidates:
+        return None
+    chosen = next((c for c in candidates if c.source_ref != avoid), candidates[0])
+    await svc.notifier.send(user_id, render_card(chosen))
+    svc.repo.mark_delivered(chosen.id)
+    await send_flashcards(svc, user_id, chosen.id)
+    return chosen.id
+
+
 async def build_evaluation(
     svc: Services,
     content_id: int,
