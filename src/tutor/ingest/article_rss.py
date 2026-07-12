@@ -72,15 +72,30 @@ def _published(entry: Any) -> datetime | None:
         return None
 
 
-def _extract_url(url: str) -> str:
-    """Fetch a page and return its main article text (trafilatura).
+_BROWSER_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
 
-    Returns "" on any failure; callers treat that as "no usable body"."""
+
+def _extract_url(url: str) -> str:
+    """Fetch a page (browser User-Agent — many sites block the default) and
+    return its main article text via trafilatura. "" on any failure."""
     import trafilatura
 
-    downloaded = trafilatura.fetch_url(url)
+    downloaded = trafilatura.fetch_url(url, no_ssl=False)
     if not downloaded:
-        return ""
+        # Fall back to httpx with a browser UA for sites that block the default.
+        try:
+            import httpx
+
+            resp = httpx.get(
+                url, timeout=20, follow_redirects=True, headers={"User-Agent": _BROWSER_UA}
+            )
+            resp.raise_for_status()
+            downloaded = resp.text
+        except Exception:  # noqa: BLE001
+            return ""
     return trafilatura.extract(downloaded, include_comments=False, include_tables=False) or ""
 
 
