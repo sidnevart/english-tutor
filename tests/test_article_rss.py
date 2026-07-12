@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tutor.ingest.article_rss import _strip_html, _truncate, normalize_entry
+from tutor.ingest.article_rss import _strip_html, _truncate, normalize_entry, raw_from_url
 
 
 def test_strip_html_removes_tags_and_collapses_whitespace() -> None:
@@ -54,3 +54,34 @@ def test_normalize_entry_falls_back_to_summary() -> None:
     raw = normalize_entry(entry, "AEON", min_chars=50, max_chars=400)
     assert raw is not None
     assert raw.body_text.startswith("S")
+
+
+def test_raw_from_url_extracts_full_text_for_teaser_feed() -> None:
+    entry = {"title": "T", "link": "https://example.com/a", "id": "i"}
+    fetched = lambda url: "Full article body. " + "x" * 500  # noqa: E731
+    raw = raw_from_url(entry, "AEON", min_chars=100, max_chars=600, fetch=fetched)
+    assert raw is not None
+    assert raw.body_text.startswith("Full article")
+    assert raw.url == "https://example.com/a"
+    assert len(raw.body_text) <= 600
+
+
+def test_raw_from_url_none_when_extraction_too_short() -> None:
+    entry = {"title": "T", "link": "https://example.com/a", "id": "i"}
+    assert (
+        raw_from_url(entry, "AEON", min_chars=500, max_chars=1000, fetch=lambda u: "short") is None
+    )
+
+
+def test_raw_from_url_none_when_no_link() -> None:
+    entry = {"title": "T"}
+    assert raw_from_url(entry, "AEON", min_chars=10, max_chars=1000, fetch=lambda u: "...") is None
+
+
+def test_raw_from_url_swallows_fetch_errors() -> None:
+    entry = {"title": "T", "link": "https://example.com/a", "id": "i"}
+
+    def boom(_url: str) -> str:
+        raise RuntimeError("network down")
+
+    assert raw_from_url(entry, "AEON", min_chars=10, max_chars=1000, fetch=boom) is None
