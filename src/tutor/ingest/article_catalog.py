@@ -22,15 +22,10 @@ class ArticleFeed:
 
 
 CATALOG: list[ArticleFeed] = [
-    # Full-text academic/explainer articles — strong TOEFL reading.
-    ArticleFeed(
-        "The Conversation",
-        "https://theconversation.com/global/articles.xml",
-    ),
-    # Long-form essays (science/culture/ideas) — truncated to TOEFL scale.
+    # Long-form essays (science/culture/ideas) — full text fetched from the link.
     ArticleFeed("AEON", "https://aeon.co/feed.rss"),
     # Magazine articles across science/history/culture.
     ArticleFeed("Smithsonian", "https://www.smithsonianmag.com/rss/latest_articles/"),
-    # General news (shorter pieces, good for quick reads).
+    # General news.
     ArticleFeed("NPR", "https://feeds.npr.org/1001/rss.xml"),
 ]
