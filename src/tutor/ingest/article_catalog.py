@@ -22,10 +22,12 @@ class ArticleFeed:
 
 
 CATALOG: list[ArticleFeed] = [
-    # Long-form essays (science/culture/ideas) — full text fetched from the link.
-    ArticleFeed("AEON", "https://aeon.co/feed.rss"),
+    # Science/philosophy essays — AEON blocks the extractor; Nautilus reads cleanly.
+    ArticleFeed("Nautilus", "https://nautil.us/feed"),
     # Magazine articles across science/history/culture.
     ArticleFeed("Smithsonian", "https://www.smithsonianmag.com/rss/latest_articles/"),
     # General news.
     ArticleFeed("NPR", "https://feeds.npr.org/1001/rss.xml"),
+    # Science journalism (full text via extraction).
+    ArticleFeed("ScienceNews", "https://www.sciencenews.org/feed"),
 ]
