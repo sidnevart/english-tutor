@@ -7,7 +7,7 @@ import typing
 
 from pydantic import BaseModel
 
-from tutor.eval.schemas import QuestionPayload, ReadingQuizPayload
+from tutor.eval.schemas import SessionError, SessionFeedbackPayload
 
 
 class StubLLMClient:
@@ -15,22 +15,25 @@ class StubLLMClient:
         return f"[stub-llm reply] {user.strip()[:120]}"
 
     async def complete_json[T: BaseModel](self, system: str, user: str, schema: type[T]) -> T:
-        if schema is ReadingQuizPayload:
-            return typing.cast(T, _stub_reading_quiz())
+        if schema is SessionFeedbackPayload:
+            return typing.cast(T, _stub_session_feedback())
         return _build_generic(schema)
 
 
-def _stub_reading_quiz() -> ReadingQuizPayload:
-    return ReadingQuizPayload(
-        questions=[
-            QuestionPayload(
-                prompt=f"Stub reading question {i + 1}: what is the main idea?",
-                options=["First option", "Second option", "Third option", "Fourth option"],
-                correct_index=i % 4,
-                explanation="Deterministic stub explanation.",
+def _stub_session_feedback() -> SessionFeedbackPayload:
+    """A practice feedback with one grammar error, so end_session captures it."""
+    return SessionFeedbackPayload(
+        strengths=["Clear ideas."],
+        errors=[
+            SessionError(
+                type="grammar",
+                error="I goes",
+                correction="I go",
+                context="I goes to school every day.",
             )
-            for i in range(3)
-        ]
+        ],
+        recurring_fixed=[],
+        assessment="Good attempt; watch subject-verb agreement.",
     )
 
 

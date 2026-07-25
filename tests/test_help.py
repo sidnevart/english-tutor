@@ -35,10 +35,7 @@ def test_html_tags_are_allowed_and_balanced():
     assert not stack, f"unclosed tags: {stack}"
 
 
-def test_literal_brackets_in_text_are_escaped():
-    # The "<question>" placeholder must be escaped so it isn't parsed as a tag.
-    assert "<question>" not in HELP_TEXT
-    assert "&lt;question&gt;" in HELP_TEXT
+def test_ampersands_are_escaped():
     # Every bare "&" must be the start of an HTML entity (&amp; / &lt; / &gt;).
     for m in re.finditer(r"&", HELP_TEXT):
         assert re.match(r"&(amp|lt|gt|quot|#\d+);", HELP_TEXT[m.start() :]), (

@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-from tutor.bot.keyboards import evening_actions, parse_callback
+from tutor.bot.keyboards import parse_callback, reset_confirm
 
 
-def test_evening_actions_with_and_without_content():
-    # Comprehension practice moved to the task file — no inline quiz button.
-    assert evening_actions(5) == [
-        [("💬 Discuss today's material", "discuss:5")],
-        [("🎙 Speaking practice", "speak:start")],
-    ]
-    assert evening_actions(None) == [[("🎙 Speaking practice", "speak:start")]]
+def test_reset_confirm_has_confirm_and_cancel():
+    data = {cb for row in reset_confirm() for _, cb in row}
+    assert "reset:confirm" in data
+    assert "reset:cancel" in data
 
 
 def test_parse_callback():
-    assert parse_callback("discuss:5") == ("discuss", ["5"])
+    assert parse_callback("reset:confirm") == ("reset", ["confirm"])

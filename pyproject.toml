@@ -1,7 +1,7 @@
 [project]
 name = "english-tutor"
 version = "0.1.0"
-description = "Autonomous self-hosted TOEFL preparation assistant for Telegram"
+description = "Self-hosted Telegram English practice bot that tracks your speaking/writing errors"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
 license = { text = "MIT" }
@@ -13,30 +13,20 @@ dependencies = [
     "pydantic-settings>=2.5",
     # bot UX
     "aiogram>=3.13",
-    # content ingestion (RSS now; Telegram userbot via the `scrape` extra)
-    "feedparser>=6.0.11",
-    # full-text extraction for teaser-only RSS feeds
-    "trafilatura>=1.12",
-    # PDF article ingestion (user-uploaded magazines)
-    "pymupdf>=1.24",
     # scheduling
     "apscheduler>=3.10,<4",
     # LLM access (OpenAI-compatible Ollama endpoint)
     "openai>=1.50",
     "httpx>=0.27",
-    # vocabulary selection
-    "wordfreq>=3.1",
-    # Anki card generation (.apkg)
+    # Anki card generation (.apkg) — for the /diary error deck
     "genanki>=0.13",
 ]
 
 [project.optional-dependencies]
-# Telegram channel scraping (MTProto userbot). The existing bot_data session
-# is a Telethon session, so we use Telethon to reuse it without re-auth.
-scrape = ["telethon>=1.36"]
-# Local speech-to-text (free, uses ffmpeg). Added in M6.
+# Local speech-to-text (free, uses ffmpeg). Not wired up yet — STT_BACKEND=cloud
+# (Groq/OpenAI) or stub is used. Install to enable a local whisper backend later.
 stt = ["faster-whisper>=1.0"]
-# Local text-to-speech. Added later.
+# Local text-to-speech. Not wired up yet — TTS_BACKEND=groq or stub is used.
 tts = ["edge-tts>=6.1"]
 
 [dependency-groups]

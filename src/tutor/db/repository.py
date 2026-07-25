@@ -1,32 +1,16 @@
-"""The repository: sole writer of the database and owner of the state machine.
+"""The repository: sole writer of the database.
 
-Callers use intent verbs (`add_content`, `mark_delivered`, `record_attempt`,
-`mark_reviewed`, ...) rather than raw SQL. Status changes go through
-`_transition`, which enforces `LEGAL_TRANSITIONS` in Python; the SQLite trigger
-is a second, independent guard.
+The bot's purpose is capturing speaking/writing errors; `session_error` is the
+source of truth for the learner's error diary. Callers use intent verbs
+(`save_session_errors`, `error_diary`, `top_session_errors`, ...) rather than
+raw SQL.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
-from datetime import UTC, datetime
-
-from tutor.domain.enums import ContentType, DeliveryStatus, QuizKind, is_legal_transition
-from tutor.domain.models import (
-    Attempt,
-    Card,
-    ContentItem,
-    Quiz,
-    QuizQuestion,
-    RawItem,
-    VocabItem,
-)
-
-
-class InvalidTransition(Exception):
-    """Raised when an illegal content_item status transition is attempted."""
+from datetime import UTC, datetime, timedelta
 
 
 def _now() -> str:
@@ -45,271 +29,38 @@ class Repository:
         )
         self.conn.commit()
 
-    # ---- content ingestion -------------------------------------------------
-    def add_content(self, item: RawItem, user_id: int) -> int | None:
-        """Insert a scraped/ingested item. Returns the new id, or None if it is
-        a duplicate — idempotent on (source_ref, external_id) and, across
-        sources, on the body hash (so the same post cross-posted to two channels
-        is stored once)."""
-        body = item.body_text.strip()
-        body_hash = hashlib.sha1(body.encode("utf-8")).hexdigest() if body else ""
-        if body_hash:
-            dup = self.conn.execute(
-                "SELECT 1 FROM content_item WHERE user_id = ? AND body_hash = ?",
-                (user_id, body_hash),
-            ).fetchone()
-            if dup:
-                return None
-
-        cur = self.conn.execute(
-            """
-            INSERT OR IGNORE INTO content_item
-                (user_id, source_type, source_ref, external_id, content_type,
-                 title, url, body_text, audio_url, duration_sec, lang,
-                 cadence_bucket, status, fetched_at, body_hash)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'NEW', ?, ?)
-            """,
-            (
-                user_id,
-                item.source_type.value,
-                item.source_ref,
-                item.external_id,
-                item.content_type.value,
-                item.title,
-                item.url,
-                item.body_text,
-                item.audio_url,
-                item.duration_sec,
-                item.lang,
-                item.cadence_bucket.value if item.cadence_bucket else None,
-                _now(),
-                body_hash,
-            ),
-        )
-        self.conn.commit()
-        return cur.lastrowid if cur.rowcount else None
-
-    def get(self, content_id: int) -> ContentItem | None:
-        row = self.conn.execute("SELECT * FROM content_item WHERE id = ?", (content_id,)).fetchone()
-        return self._to_content(row) if row else None
-
-    def fetch_by_status(
-        self,
-        user_id: int,
-        status: DeliveryStatus,
-        limit: int = 50,
-        content_type: ContentType | None = None,
-    ) -> list[ContentItem]:
-        sql = "SELECT * FROM content_item WHERE user_id = ? AND status = ?"
-        params: list[object] = [user_id, status.value]
-        if content_type is not None:
-            sql += " AND content_type = ?"
-            params.append(content_type.value)
-        sql += " ORDER BY fetched_at ASC LIMIT ?"
-        params.append(limit)
-        rows = self.conn.execute(sql, params).fetchall()
-        return [self._to_content(r) for r in rows]
-
-    def set_body_text(self, content_id: int, body_text: str) -> None:
-        """Fill in a podcast transcript (or correct an article body)."""
-        self.conn.execute(
-            "UPDATE content_item SET body_text = ? WHERE id = ?", (body_text, content_id)
-        )
-        self.conn.commit()
-
-    # ---- state machine -----------------------------------------------------
-    def mark_delivered(self, content_id: int) -> None:
-        self._transition(content_id, DeliveryStatus.DELIVERED)
-
-    def mark_reviewed(self, content_id: int) -> None:
-        self._transition(content_id, DeliveryStatus.REVIEWED)
-
-    def mark_skipped(self, content_id: int) -> None:
-        self._transition(content_id, DeliveryStatus.SKIPPED)
-
-    def mark_failed(self, content_id: int) -> None:
-        self._transition(content_id, DeliveryStatus.FAILED)
-
-    def requeue(self, content_id: int) -> None:
-        self._transition(content_id, DeliveryStatus.NEW)
-
-    def _transition(self, content_id: int, dst: DeliveryStatus) -> None:
+    # ---- prefs (push alternation, topic index, ...) -----------------------
+    def get_pref(self, user_id: int, key: str, default: object = None) -> object:
+        """Read a key from the subscriber's prefs_json blob."""
         row = self.conn.execute(
-            "SELECT status FROM content_item WHERE id = ?", (content_id,)
+            "SELECT prefs_json FROM subscriber WHERE user_id = ?", (user_id,)
         ).fetchone()
         if row is None:
-            raise KeyError(f"content_item {content_id} not found")
-        src = DeliveryStatus(row["status"])
-        if not is_legal_transition(src, dst):
-            raise InvalidTransition(f"{src} -> {dst} (content_item {content_id})")
-
-        sets = ["status = ?"]
-        params: list[object] = [dst.value]
-        if dst == DeliveryStatus.DELIVERED:
-            sets.append("delivered_at = ?")
-            params.append(_now())
-        elif dst == DeliveryStatus.REVIEWED:
-            sets.append("reviewed_at = ?")
-            params.append(_now())
-        params.append(content_id)
+            return default
         try:
-            self.conn.execute(f"UPDATE content_item SET {', '.join(sets)} WHERE id = ?", params)
-            self.conn.commit()
-        except sqlite3.IntegrityError as exc:  # trigger fired (defense-in-depth)
-            raise InvalidTransition(str(exc)) from exc
+            data = json.loads(row["prefs_json"] or "{}")
+        except (ValueError, TypeError):
+            return default
+        return data.get(key, default)
 
-    # ---- quizzes & attempts ------------------------------------------------
-    def save_quiz(self, content_id: int, kind: QuizKind, questions: list[QuizQuestion]) -> int:
-        cur = self.conn.execute(
-            "INSERT INTO quiz (content_id, kind, created_at) VALUES (?, ?, ?)",
-            (content_id, kind.value, _now()),
-        )
-        quiz_id = int(cur.lastrowid)
-        for q in questions:
-            qc = self.conn.execute(
-                """
-                INSERT INTO quiz_question
-                    (quiz_id, prompt, options_json, correct_index, explanation,
-                     correct_indices_json)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    quiz_id,
-                    q.prompt,
-                    json.dumps(q.options),
-                    q.correct_index,
-                    q.explanation,
-                    json.dumps(q.correct_indices) if q.correct_indices else "",
-                ),
-            )
-            q.id = int(qc.lastrowid)
-            q.quiz_id = quiz_id
-        self.conn.commit()
-        return quiz_id
-
-    def get_quiz(self, content_id: int, kind: QuizKind) -> Quiz | None:
-        """Return the latest quiz of the given kind for this content, or None."""
-        qrow = self.conn.execute(
-            "SELECT * FROM quiz WHERE content_id = ? AND kind = ? ORDER BY id DESC LIMIT 1",
-            (content_id, kind.value),
-        ).fetchone()
-        if qrow is None:
-            return None
-        qrows = self.conn.execute(
-            "SELECT * FROM quiz_question WHERE quiz_id = ? ORDER BY id", (qrow["id"],)
-        ).fetchall()
-        questions = [
-            QuizQuestion(
-                id=r["id"],
-                quiz_id=r["quiz_id"],
-                prompt=r["prompt"],
-                options=json.loads(r["options_json"]),
-                correct_index=r["correct_index"],
-                correct_indices=(
-                    json.loads(r["correct_indices_json"])
-                    if (r["correct_indices_json"] or "").strip()
-                    else []
-                ),
-                explanation=r["explanation"],
-            )
-            for r in qrows
-        ]
-        return Quiz(id=qrow["id"], content_id=content_id, kind=kind, questions=questions)
-
-    def get_quiz_auto(self, content_id: int) -> Quiz | None:
-        """Return the latest quiz for this content, auto-detecting kind from
-        the content type (READING for articles, LISTENING for podcasts)."""
+    def set_pref(self, user_id: int, key: str, value: object) -> None:
+        """Write a key into the subscriber's prefs_json blob (upserts the row)."""
+        self.ensure_subscriber(user_id)
         row = self.conn.execute(
-            "SELECT content_type FROM content_item WHERE id = ?", (content_id,)
+            "SELECT prefs_json FROM subscriber WHERE user_id = ?", (user_id,)
         ).fetchone()
-        if row is None:
-            return None
-        kind = (
-            QuizKind.LISTENING
-            if row["content_type"] == ContentType.PODCAST.value
-            else QuizKind.READING
-        )
-        return self.get_quiz(content_id, kind)
-
-    def record_attempt(
-        self, quiz_question_id: int, user_id: int, chosen_index: int, is_correct: bool
-    ) -> int:
-        cur = self.conn.execute(
-            """
-            INSERT INTO attempt
-                (quiz_question_id, user_id, chosen_index, is_correct, answered_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (quiz_question_id, user_id, chosen_index, int(is_correct), _now()),
+        try:
+            data = json.loads(row["prefs_json"] or "{}") if row else {}
+        except (ValueError, TypeError):
+            data = {}
+        data[key] = value
+        self.conn.execute(
+            "UPDATE subscriber SET prefs_json = ? WHERE user_id = ?",
+            (json.dumps(data), user_id),
         )
         self.conn.commit()
-        return int(cur.lastrowid)
 
-    def attempts_for_content(self, content_id: int, user_id: int) -> list[Attempt]:
-        rows = self.conn.execute(
-            """
-            SELECT a.* FROM attempt a
-            JOIN quiz_question qq ON qq.id = a.quiz_question_id
-            JOIN quiz q ON q.id = qq.quiz_id
-            WHERE q.content_id = ? AND a.user_id = ?
-            ORDER BY a.id
-            """,
-            (content_id, user_id),
-        ).fetchall()
-        return [
-            Attempt(
-                id=r["id"],
-                quiz_question_id=r["quiz_question_id"],
-                user_id=r["user_id"],
-                chosen_index=r["chosen_index"],
-                is_correct=bool(r["is_correct"]),
-                answered_at=r["answered_at"],
-            )
-            for r in rows
-        ]
-
-    # ---- vocabulary --------------------------------------------------------
-    def save_vocab(self, content_id: int, items: list[VocabItem]) -> None:
-        for v in items:
-            self.conn.execute(
-                """
-                INSERT OR IGNORE INTO vocab_item
-                    (content_id, word, lemma, definition, example, freq_rank, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (content_id, v.word, v.lemma, v.definition, v.example, v.freq_rank, _now()),
-            )
-        self.conn.commit()
-
-    def get_vocab(self, content_id: int) -> list[VocabItem]:
-        rows = self.conn.execute(
-            "SELECT * FROM vocab_item WHERE content_id = ? ORDER BY freq_rank", (content_id,)
-        ).fetchall()
-        return [
-            VocabItem(
-                id=r["id"],
-                content_id=r["content_id"],
-                word=r["word"],
-                lemma=r["lemma"],
-                definition=r["definition"],
-                example=r["example"],
-                freq_rank=r["freq_rank"],
-            )
-            for r in rows
-        ]
-
-    # ---- anki & logs -------------------------------------------------------
-    def save_anki_cards(self, content_id: int, cards: list[Card], deck: str, sink: str) -> None:
-        for c in cards:
-            self.conn.execute(
-                """
-                INSERT INTO anki_card (content_id, front, back, deck, sink, exported_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (content_id, c.front, c.back, deck, sink, _now()),
-            )
-        self.conn.commit()
-
+    # ---- logs --------------------------------------------------------------
     def log_job(self, job: str, status: str, detail: str = "") -> None:
         self.conn.execute(
             "INSERT INTO schedule_log (job, run_at, status, detail) VALUES (?, ?, ?, ?)",
@@ -317,11 +68,19 @@ class Repository:
         )
         self.conn.commit()
 
-    # ---- session errors ----------------------------------------------------
+    def recent_job_logs(self, limit: int = 10) -> list[dict[str, str]]:
+        """Return the most recent schedule_log entries."""
+        rows = self.conn.execute(
+            "SELECT job, run_at, status, detail FROM schedule_log ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ---- session errors (the error diary) ---------------------------------
     def save_session_errors(
         self, user_id: int, session_type: str, errors: list[dict[str, str]]
     ) -> None:
-        """Persist errors extracted from a speaking/coach session feedback."""
+        """Persist errors extracted from a speaking/writing session feedback."""
         for e in errors:
             self.conn.execute(
                 """
@@ -372,298 +131,49 @@ class Repository:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def get_anki_cards_today(self, user_id: int) -> list[tuple[str, str]]:
-        """Return Anki cards from items delivered today only."""
-        today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-        rows = self.conn.execute(
-            """
-            SELECT a.front, a.back FROM anki_card a
-            JOIN content_item ci ON ci.id = a.content_id
-            WHERE ci.user_id = ? AND ci.delivered_at >= ?
-            ORDER BY a.id DESC
-            """,
-            (user_id, today),
-        ).fetchall()
-        return [(r["front"], r["back"]) for r in rows]
-
-    # ---- essays -------------------------------------------------------------
-    def save_essay(
-        self,
-        user_id: int,
-        prompt: str,
-        essay_text: str,
-        score: int | None,
-        feedback: str,
-        essay_type: str,
-    ) -> int:
-        cur = self.conn.execute(
-            """
-            INSERT INTO essay (user_id, prompt, essay_text, score, feedback, essay_type, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (user_id, prompt, essay_text, score, feedback, essay_type, _now()),
-        )
-        self.conn.commit()
-        return int(cur.lastrowid)
-
-    def recent_essays(self, user_id: int, limit: int = 5) -> list[dict[str, object]]:
-        rows = self.conn.execute(
-            """
-            SELECT id, prompt, essay_text, score, feedback, essay_type, created_at
-            FROM essay WHERE user_id = ?
-            ORDER BY created_at DESC LIMIT ?
-            """,
-            (user_id, limit),
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-    def essay_count(self, user_id: int) -> int:
-        row = self.conn.execute(
-            "SELECT count(*) AS c FROM essay WHERE user_id = ?", (user_id,)
-        ).fetchone()
-        return int(row["c"])
-
-    def essay_scores(self, user_id: int) -> dict[str, object]:
-        """Summary of graded essays: average, count, and the most recent score."""
-        agg = self.conn.execute(
-            "SELECT AVG(score) AS avg, COUNT(score) AS n FROM essay "
-            "WHERE user_id = ? AND score IS NOT NULL",
-            (user_id,),
-        ).fetchone()
-        last = self.conn.execute(
-            "SELECT score, essay_type FROM essay "
-            "WHERE user_id = ? AND score IS NOT NULL ORDER BY created_at DESC LIMIT 1",
-            (user_id,),
-        ).fetchone()
-        return {
-            "avg": agg["avg"],
-            "count": int(agg["n"]),
-            "last": last["score"] if last else None,
-            "last_type": last["essay_type"] if last else None,
-        }
-
-    def last_essay_type(self, user_id: int) -> str | None:
-        """Return the essay_type of the most recent essay, or None."""
-        row = self.conn.execute(
-            "SELECT essay_type FROM essay WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
-            (user_id,),
-        ).fetchone()
-        return row["essay_type"] if row else None
-
-    # ---- speaking attempts --------------------------------------------------
-    def save_speaking_attempt(
-        self,
-        user_id: int,
-        task_type: str,
-        prompt: str,
-        transcript: str,
-        *,
-        delivery: int | None,
-        language_use: int | None,
-        topic_dev: int | None,
-        score: int | None,
-        scaled_30: int | None,
-        feedback: str,
-    ) -> int:
-        cur = self.conn.execute(
-            """
-            INSERT INTO speaking_attempt
-                (user_id, task_type, prompt, transcript, delivery, language_use,
-                 topic_dev, score, scaled_30, feedback, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                user_id,
-                task_type,
-                prompt,
-                transcript,
-                delivery,
-                language_use,
-                topic_dev,
-                score,
-                scaled_30,
-                feedback,
-                _now(),
-            ),
-        )
-        self.conn.commit()
-        return int(cur.lastrowid)
-
-    def last_speaking_type(self, user_id: int) -> str | None:
-        row = self.conn.execute(
-            "SELECT task_type FROM speaking_attempt WHERE user_id = ? "
-            "ORDER BY created_at DESC LIMIT 1",
-            (user_id,),
-        ).fetchone()
-        return row["task_type"] if row else None
-
-    def speaking_scores(self, user_id: int) -> dict[str, object]:
-        """Summary of scored speaking attempts: average and most recent overall score."""
-        agg = self.conn.execute(
-            "SELECT AVG(score) AS avg, COUNT(score) AS n FROM speaking_attempt "
-            "WHERE user_id = ? AND score IS NOT NULL",
-            (user_id,),
-        ).fetchone()
-        last = self.conn.execute(
-            "SELECT score, scaled_30, task_type FROM speaking_attempt "
-            "WHERE user_id = ? AND score IS NOT NULL ORDER BY created_at DESC LIMIT 1",
-            (user_id,),
-        ).fetchone()
-        return {
-            "avg": agg["avg"],
-            "count": int(agg["n"]),
-            "last": last["score"] if last else None,
-            "last_scaled": last["scaled_30"] if last else None,
-            "last_type": last["task_type"] if last else None,
-        }
-
-    # ---- topic progress -----------------------------------------------------
-    def record_topic_progress(
-        self,
-        user_id: int,
-        topic: str,
-        source_type: str,
-        source_id: int | None = None,
-        score: float | None = None,
-    ) -> None:
-        """Record a topic interaction (quiz result, session, essay)."""
-        self.conn.execute(
-            """
-            INSERT OR REPLACE INTO topic_progress
-                (user_id, topic, source_type, source_id, score, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (user_id, topic, source_type, source_id, score, _now()),
-        )
-        self.conn.commit()
-
-    def weak_topics(self, user_id: int, limit: int = 5) -> list[dict[str, object]]:
-        """Return topics with lowest average scores."""
-        rows = self.conn.execute(
-            """
-            SELECT topic, AVG(score) as avg_score, COUNT(*) as count
-            FROM topic_progress
-            WHERE user_id = ? AND score IS NOT NULL
-            GROUP BY topic
-            ORDER BY avg_score ASC
-            LIMIT ?
-            """,
-            (user_id, limit),
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-    def strong_topics(self, user_id: int, limit: int = 5) -> list[dict[str, object]]:
-        """Return topics with highest average scores."""
-        rows = self.conn.execute(
-            """
-            SELECT topic, AVG(score) as avg_score, COUNT(*) as count
-            FROM topic_progress
-            WHERE user_id = ? AND score IS NOT NULL
-            GROUP BY topic
-            ORDER BY avg_score DESC
-            LIMIT ?
-            """,
-            (user_id, limit),
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-    def practice_streak(self, user_id: int) -> int:
-        """Calculate consecutive days with at least one activity."""
-        rows = self.conn.execute(
-            """
-            SELECT DISTINCT DATE(day) as day FROM (
-                SELECT delivered_at as day FROM content_item
-                    WHERE user_id = ? AND delivered_at IS NOT NULL
-                UNION ALL
-                SELECT answered_at as day FROM attempt WHERE user_id = ?
-                UNION ALL
-                SELECT created_at as day FROM session_error WHERE user_id = ?
-                UNION ALL
-                SELECT created_at as day FROM essay WHERE user_id = ?
+    def error_diary(
+        self, user_id: int, *, days: int | None = None, limit: int = 200
+    ) -> list[dict[str, object]]:
+        """One row per distinct (error_type, error_text): how often it recurs,
+        when it was first/last seen, and the most recent correction + context.
+        Ordered by frequency (then most recent). Powers the /diary export."""
+        params: list[object] = [user_id]
+        where = "e.user_id = ?"
+        if days is not None:
+            cutoff = (
+                (datetime.now(UTC) - timedelta(days=days))
+                .replace(hour=0, minute=0, second=0, microsecond=0)
+                .isoformat()
             )
-            ORDER BY day DESC
+            where += " AND e.created_at >= ?"
+            params.append(cutoff)
+        params.append(limit)
+        rows = self.conn.execute(
+            f"""
+            SELECT e.error_type, e.error_text,
+                   (SELECT correction FROM session_error
+                    WHERE user_id = e.user_id AND error_type = e.error_type
+                          AND error_text = e.error_text
+                    ORDER BY created_at DESC LIMIT 1) AS correction,
+                   (SELECT context FROM session_error
+                    WHERE user_id = e.user_id AND error_type = e.error_type
+                          AND error_text = e.error_text
+                    ORDER BY created_at DESC LIMIT 1) AS last_context,
+                   COUNT(*) AS count,
+                   MIN(e.created_at) AS first_seen,
+                   MAX(e.created_at) AS last_seen
+            FROM session_error e
+            WHERE {where}
+            GROUP BY e.error_type, e.error_text
+            ORDER BY count DESC, last_seen DESC
+            LIMIT ?
             """,
-            (user_id, user_id, user_id, user_id),
-        ).fetchall()
-        if not rows:
-            return 0
-        from datetime import datetime as dt
-        from datetime import timedelta
-
-        streak = 0
-        today = dt.now(UTC).date()
-        for row in rows:
-            day = dt.fromisoformat(row["day"]).date()
-            expected = today - timedelta(days=streak)
-            if day == expected:
-                streak += 1
-            elif day < expected:
-                break
-        return streak
-
-    # ---- progress tracking -------------------------------------------------
-    def count_status(self, user_id: int, status: DeliveryStatus) -> int:
-        row = self.conn.execute(
-            "SELECT count(*) AS c FROM content_item WHERE user_id = ? AND status = ?",
-            (user_id, status.value),
-        ).fetchone()
-        return int(row["c"])
-
-    def count_status_by_type(self, user_id: int, status: DeliveryStatus) -> dict[str, int]:
-        """Return {content_type: count} for the given status."""
-        rows = self.conn.execute(
-            "SELECT content_type, count(*) AS c FROM content_item "
-            "WHERE user_id = ? AND status = ? GROUP BY content_type",
-            (user_id, status.value),
-        ).fetchall()
-        return {r["content_type"]: int(r["c"]) for r in rows}
-
-    def pending_by_source(self, user_id: int) -> list[dict[str, object]]:
-        """Return [{source_ref, source_type, n}] counts of NEW content grouped by
-        source (channel / feed / uploaded issue), oldest issue first. Used by
-        /queue to show what is waiting to be delivered."""
-        rows = self.conn.execute(
-            "SELECT source_ref, source_type, COUNT(*) AS n FROM content_item "
-            "WHERE user_id = ? AND status = ? GROUP BY source_ref, source_type "
-            "ORDER BY MIN(fetched_at) ASC",
-            (user_id, DeliveryStatus.NEW.value),
+            params,
         ).fetchall()
         return [dict(r) for r in rows]
-
-    def quiz_accuracy_by_week(self, user_id: int, weeks: int = 4) -> list[dict[str, object]]:
-        """Return per-week quiz accuracy (last N weeks). Each entry has
-        week (ISO year-week), correct, total, and pct (0.0-100.0)."""
-        from datetime import timedelta
-
-        cutoff = (
-            (datetime.now(UTC) - timedelta(days=weeks * 7))
-            .replace(hour=0, minute=0, second=0, microsecond=0)
-            .isoformat()
-        )
-        rows = self.conn.execute(
-            """
-            SELECT strftime('%Y-W%W', a.answered_at) AS week,
-                   SUM(a.is_correct) AS correct, COUNT(*) AS total
-            FROM attempt a
-            WHERE a.user_id = ? AND a.answered_at >= ?
-            GROUP BY week ORDER BY week
-            """,
-            (user_id, cutoff),
-        ).fetchall()
-        return [
-            {
-                "week": r["week"],
-                "correct": int(r["correct"]),
-                "total": int(r["total"]),
-                "pct": round(100 * r["correct"] / r["total"], 1) if r["total"] else 0.0,
-            }
-            for r in rows
-        ]
 
     def error_count_by_week(self, user_id: int, weeks: int = 4) -> list[dict[str, object]]:
         """Return per-week error count (last N weeks)."""
-        from datetime import timedelta
-
         cutoff = (
             (datetime.now(UTC) - timedelta(days=weeks * 7))
             .replace(hour=0, minute=0, second=0, microsecond=0)
@@ -681,327 +191,36 @@ class Repository:
         ).fetchall()
         return [{"week": r["week"], "count": int(r["count"])} for r in rows]
 
-    def vocab_seen_count(self, user_id: int) -> int:
-        """Return the total number of distinct vocabulary words seen."""
-        row = self.conn.execute(
+    def practice_streak(self, user_id: int) -> int:
+        """Consecutive days with at least one captured error (any practice)."""
+        rows = self.conn.execute(
             """
-            SELECT COUNT(DISTINCT v.word) AS c FROM vocab_item v
-            JOIN content_item ci ON ci.id = v.content_id
-            WHERE ci.user_id = ?
+            SELECT DISTINCT DATE(created_at) AS day
+            FROM session_error
+            WHERE user_id = ?
+            ORDER BY day DESC
             """,
             (user_id,),
-        ).fetchone()
-        return int(row["c"])
-
-    def recent_job_logs(self, limit: int = 10) -> list[dict[str, str]]:
-        """Return the most recent schedule_log entries."""
-        rows = self.conn.execute(
-            "SELECT job, run_at, status, detail FROM schedule_log ORDER BY id DESC LIMIT ?",
-            (limit,),
         ).fetchall()
-        return [dict(r) for r in rows]
-
-    def anki_card_count(self, user_id: int) -> int:
-        row = self.conn.execute(
-            "SELECT count(*) AS c FROM anki_card a "
-            "JOIN content_item ci ON ci.id = a.content_id WHERE ci.user_id = ?",
-            (user_id,),
-        ).fetchone()
-        return int(row["c"])
-
-    def latest_delivered_content(self, user_id: int) -> ContentItem | None:
-        """Return the most recently delivered article/podcast for the user."""
-        row = self.conn.execute(
-            "SELECT * FROM content_item WHERE user_id = ? AND delivered_at IS NOT NULL "
-            "ORDER BY delivered_at DESC LIMIT 1",
-            (user_id,),
-        ).fetchone()
-        return self._to_content(row) if row else None
-
-    def anki_fronts_for_content(self, content_id: int) -> set[str]:
-        """Return the set of lowercased card fronts already generated for an item."""
-        rows = self.conn.execute(
-            "SELECT front FROM anki_card WHERE content_id = ?", (content_id,)
-        ).fetchall()
-        return {r["front"].strip().lower() for r in rows}
-
-    def get_anki_cards(self, user_id: int, limit: int = 300) -> list[tuple[str, str]]:
-        rows = self.conn.execute(
-            "SELECT a.front, a.back FROM anki_card a "
-            "JOIN content_item ci ON ci.id = a.content_id WHERE ci.user_id = ? "
-            "ORDER BY a.id DESC LIMIT ?",
-            (user_id, limit),
-        ).fetchall()
-        return [(r["front"], r["back"]) for r in rows]
+        if not rows:
+            return 0
+        streak = 0
+        today = datetime.now(UTC).date()
+        for row in rows:
+            day = datetime.fromisoformat(row["day"]).date()
+            expected = today - timedelta(days=streak)
+            if day == expected:
+                streak += 1
+            elif day < expected:
+                break
+        return streak
 
     # ---- reset -------------------------------------------------------------
     def reset_progress(self, user_id: int) -> dict[str, int]:
-        """Wipe all learning progress for the user. Content items are kept
-        (they're still valid articles/podcasts) but reset to NEW status so
-        they can be re-delivered. Returns counts of deleted rows per table."""
+        """Wipe the learner's error diary and prefs. Returns deleted counts."""
         counts: dict[str, int] = {}
-
-        # Attempts (join through quiz_question -> quiz -> content_item).
-        cur = self.conn.execute(
-            "DELETE FROM attempt WHERE user_id = ? AND quiz_question_id IN "
-            "(SELECT qq.id FROM quiz_question qq "
-            "JOIN quiz q ON q.id = qq.quiz_id "
-            "JOIN content_item ci ON ci.id = q.content_id "
-            "WHERE ci.user_id = ?)",
-            (user_id, user_id),
-        )
-        counts["attempts"] = cur.rowcount
-
-        # Anki cards (join through content_item).
-        cur = self.conn.execute(
-            "DELETE FROM anki_card WHERE content_id IN "
-            "(SELECT id FROM content_item WHERE user_id = ?)",
-            (user_id,),
-        )
-        counts["anki_cards"] = cur.rowcount
-
-        # Quizzes (cascade deletes quiz_question rows too).
-        cur = self.conn.execute(
-            "DELETE FROM quiz WHERE content_id IN (SELECT id FROM content_item WHERE user_id = ?)",
-            (user_id,),
-        )
-        counts["quizzes"] = cur.rowcount
-
-        # Vocab items.
-        cur = self.conn.execute(
-            "DELETE FROM vocab_item WHERE content_id IN "
-            "(SELECT id FROM content_item WHERE user_id = ?)",
-            (user_id,),
-        )
-        counts["vocab_items"] = cur.rowcount
-
-        # Session errors.
         cur = self.conn.execute("DELETE FROM session_error WHERE user_id = ?", (user_id,))
         counts["session_errors"] = cur.rowcount
-
-        # Topic progress.
-        cur = self.conn.execute("DELETE FROM topic_progress WHERE user_id = ?", (user_id,))
-        counts["topic_progress"] = cur.rowcount
-
-        # Essays.
-        cur = self.conn.execute("DELETE FROM essay WHERE user_id = ?", (user_id,))
-        counts["essays"] = cur.rowcount
-
-        # Speaking attempts.
-        cur = self.conn.execute("DELETE FROM speaking_attempt WHERE user_id = ?", (user_id,))
-        counts["speaking_attempts"] = cur.rowcount
-
-        # Worksheets.
-        cur = self.conn.execute("DELETE FROM worksheet WHERE user_id = ?", (user_id,))
-        counts["worksheets"] = cur.rowcount
-
-        # Reset content_item status to NEW, clear delivery timestamps.
-        # Temporarily drop the state-machine trigger — the reset intentionally
-        # forces REVIEWED/DELIVERED → NEW, which the normal guard rejects.
-        self.conn.execute("DROP TRIGGER IF EXISTS trg_content_status_guard")
-        self.conn.execute(
-            "UPDATE content_item SET status = 'NEW', delivered_at = NULL, "
-            "reviewed_at = NULL WHERE user_id = ?",
-            (user_id,),
-        )
-        # Recreate the trigger (idempotent via IF NOT EXISTS).
-        self.conn.execute(
-            """
-            CREATE TRIGGER IF NOT EXISTS trg_content_status_guard
-            BEFORE UPDATE OF status ON content_item
-            FOR EACH ROW
-            WHEN NEW.status <> OLD.status AND NOT (
-                   (OLD.status = 'NEW'       AND NEW.status IN ('DELIVERED', 'SKIPPED', 'FAILED'))
-                OR (OLD.status = 'DELIVERED' AND NEW.status IN ('REVIEWED', 'SKIPPED', 'FAILED'))
-                OR (OLD.status = 'SKIPPED'   AND NEW.status = 'NEW')
-                OR (OLD.status = 'FAILED'    AND NEW.status = 'NEW')
-            )
-            BEGIN
-                SELECT RAISE(ABORT, 'illegal content_item status transition');
-            END;
-            """
-        )
-
-        # Clear subscriber prefs (stale progress references).
-        self.conn.execute(
-            "UPDATE subscriber SET prefs_json = '{}' WHERE user_id = ?",
-            (user_id,),
-        )
-
+        self.conn.execute("UPDATE subscriber SET prefs_json = '{}' WHERE user_id = ?", (user_id,))
         self.conn.commit()
         return counts
-
-    # ---- writing tasks (file-based essay flow) ----------------------------
-    def save_writing_task(
-        self,
-        user_id: int,
-        essay_type: str,
-        prompt: str,
-        passage: str = "",
-        lecture: str = "",
-    ) -> int:
-        """Create a pending writing-task row and return its id."""
-        cur = self.conn.execute(
-            """
-            INSERT INTO writing_task
-                (user_id, essay_type, prompt, passage, lecture, status, created_at)
-            VALUES (?, ?, ?, ?, ?, 'pending', ?)
-            """,
-            (user_id, essay_type, prompt, passage, lecture, _now()),
-        )
-        self.conn.commit()
-        return int(cur.lastrowid)
-
-    def get_writing_task(self, task_id: int) -> dict | None:
-        row = self.conn.execute("SELECT * FROM writing_task WHERE id = ?", (task_id,)).fetchone()
-        return dict(row) if row else None
-
-    def mark_writing_task_submitted(self, task_id: int) -> None:
-        self.conn.execute("UPDATE writing_task SET status = 'submitted' WHERE id = ?", (task_id,))
-        self.conn.commit()
-
-    # ---- worksheets --------------------------------------------------------
-    def save_worksheet(self, user_id: int, items_json: str) -> int:
-        """Create a new worksheet and return its id."""
-        cur = self.conn.execute(
-            "INSERT INTO worksheet (user_id, created_at, items_json) VALUES (?, ?, ?)",
-            (user_id, _now(), items_json),
-        )
-        self.conn.commit()
-        return int(cur.lastrowid)
-
-    def get_worksheet(self, worksheet_id: int) -> dict | None:
-        """Return a worksheet row as a dict, or None."""
-        row = self.conn.execute("SELECT * FROM worksheet WHERE id = ?", (worksheet_id,)).fetchone()
-        return dict(row) if row else None
-
-    def get_latest_worksheet(self, user_id: int, status: str = "pending") -> dict | None:
-        """Return the most recent worksheet with the given status."""
-        row = self.conn.execute(
-            "SELECT * FROM worksheet WHERE user_id = ? AND status = ? "
-            "ORDER BY created_at DESC LIMIT 1",
-            (user_id, status),
-        ).fetchone()
-        return dict(row) if row else None
-
-    def update_worksheet_answers(self, worksheet_id: int, answers: str) -> None:
-        """Store the user's submitted answers."""
-        self.conn.execute(
-            "UPDATE worksheet SET answers = ?, status = 'submitted' WHERE id = ?",
-            (answers, worksheet_id),
-        )
-        self.conn.commit()
-
-    def update_worksheet_grade(self, worksheet_id: int, score: float, feedback: str) -> None:
-        """Store grading results."""
-        self.conn.execute(
-            "UPDATE worksheet SET score = ?, feedback = ?, status = 'graded' WHERE id = ?",
-            (score, feedback, worksheet_id),
-        )
-        self.conn.commit()
-
-    def get_vocab_today(self, user_id: int, limit: int = 15) -> list[VocabItem]:
-        """Return vocabulary items from content delivered today."""
-        today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-        rows = self.conn.execute(
-            "SELECT v.* FROM vocab_item v "
-            "JOIN content_item ci ON ci.id = v.content_id "
-            "WHERE ci.user_id = ? AND ci.delivered_at >= ? "
-            "ORDER BY v.freq_rank ASC LIMIT ?",
-            (user_id, today, limit),
-        ).fetchall()
-        return [
-            VocabItem(
-                id=r["id"],
-                content_id=r["content_id"],
-                word=r["word"],
-                lemma=r["lemma"],
-                definition=r["definition"],
-                example=r["example"],
-                freq_rank=r["freq_rank"],
-            )
-            for r in rows
-        ]
-
-    def get_today_articles(
-        self, user_id: int, limit: int = 2, days_back: int = 2
-    ) -> list[ContentItem]:
-        """Return articles delivered in the last `days_back` days."""
-        from datetime import timedelta
-
-        cutoff = (
-            (datetime.now(UTC) - timedelta(days=days_back))
-            .replace(hour=0, minute=0, second=0, microsecond=0)
-            .isoformat()
-        )
-        rows = self.conn.execute(
-            "SELECT * FROM content_item "
-            "WHERE user_id = ? AND content_type = 'article' AND delivered_at >= ? "
-            "ORDER BY delivered_at DESC LIMIT ?",
-            (user_id, cutoff, limit),
-        ).fetchall()
-        return [self._to_content(r) for r in rows]
-
-    def get_today_podcasts(
-        self, user_id: int, limit: int = 2, days_back: int = 2
-    ) -> list[ContentItem]:
-        """Return podcasts delivered in the last `days_back` days."""
-        from datetime import timedelta
-
-        cutoff = (
-            (datetime.now(UTC) - timedelta(days=days_back))
-            .replace(hour=0, minute=0, second=0, microsecond=0)
-            .isoformat()
-        )
-        rows = self.conn.execute(
-            "SELECT * FROM content_item "
-            "WHERE user_id = ? AND content_type = 'podcast' AND delivered_at >= ? "
-            "ORDER BY delivered_at DESC LIMIT ?",
-            (user_id, cutoff, limit),
-        ).fetchall()
-        return [self._to_content(r) for r in rows]
-
-    def worksheet_count(self, user_id: int) -> int:
-        """Return total worksheets completed (graded)."""
-        row = self.conn.execute(
-            "SELECT count(*) AS c FROM worksheet WHERE user_id = ? AND status = 'graded'",
-            (user_id,),
-        ).fetchone()
-        return int(row["c"])
-
-    # ---- channel watermarks ------------------------------------------------
-    def get_watermark(self, channel_ref: str) -> dict[str, object] | None:
-        """Return {max_scraped_id, min_scraped_id} for this channel, or None if never scraped."""
-        row = self.conn.execute(
-            "SELECT max_scraped_id, min_scraped_id FROM channel_watermark WHERE channel_ref = ?",
-            (channel_ref,),
-        ).fetchone()
-        return dict(row) if row else None
-
-    def set_watermark(self, channel_ref: str, max_id: int, min_id: int | None) -> None:
-        """Upsert watermark: always extend the range (never shrink max, never raise min)."""
-        existing = self.get_watermark(channel_ref)
-        if existing:
-            new_max = max(int(existing["max_scraped_id"]), max_id)
-            old_min = existing["min_scraped_id"]
-            if old_min is not None and min_id is not None:
-                new_min: int | None = min(int(old_min), min_id)
-            else:
-                new_min = min_id if min_id is not None else old_min
-        else:
-            new_max = max_id
-            new_min = min_id
-        self.conn.execute(
-            """
-            INSERT OR REPLACE INTO channel_watermark
-                (channel_ref, max_scraped_id, min_scraped_id, last_run_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            (channel_ref, new_max, new_min, _now()),
-        )
-        self.conn.commit()
-
-    # ---- helpers -----------------------------------------------------------
-    @staticmethod
-    def _to_content(row: sqlite3.Row) -> ContentItem:
-        return ContentItem(**dict(row))

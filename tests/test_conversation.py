@@ -1,9 +1,9 @@
-"""Conversation engine sessions (speaking practice), using a fake FSM state."""
+"""Conversation engine sessions (speaking & writing practice), fake FSM state."""
 
 from __future__ import annotations
 
 from tutor.app import open_services
-from tutor.bot.conversation import end_session, handle_turn, start_speaking
+from tutor.bot.conversation import end_session, handle_turn, start_practice
 from tutor.config import Settings
 
 
@@ -42,10 +42,10 @@ def _settings(tmp_path) -> Settings:
     )
 
 
-async def test_start_speaking_opens_session(tmp_path):
+async def test_start_speak_opens_session(tmp_path):
     with open_services(_settings(tmp_path)) as svc:
         st = FakeState()
-        await start_speaking(svc, None, svc.settings.admin_user_id, st)
+        await start_practice(svc, None, svc.settings.admin_user_id, st, "speak")
         assert st.data["mode"] == "speak"
         assert st.state is not None
         history = st.data["history"]
@@ -53,11 +53,19 @@ async def test_start_speaking_opens_session(tmp_path):
         assert len(svc.notifier.messages) == 1  # type: ignore[attr-defined]
 
 
+async def test_start_write_opens_session(tmp_path):
+    with open_services(_settings(tmp_path)) as svc:
+        st = FakeState()
+        await start_practice(svc, None, svc.settings.admin_user_id, st, "write")
+        assert st.data["mode"] == "write"
+        assert "Writing practice" in svc.notifier.messages[0].text  # type: ignore[attr-defined]
+
+
 async def test_handle_turn_appends_and_replies(tmp_path):
     with open_services(_settings(tmp_path)) as svc:
         user = svc.settings.admin_user_id
         st = FakeState()
-        await start_speaking(svc, None, user, st)
+        await start_practice(svc, None, user, st, "speak")
         before = len(svc.notifier.messages)  # type: ignore[attr-defined]
 
         await handle_turn(svc, None, user, st, "I really like coffee.")
@@ -66,13 +74,15 @@ async def test_handle_turn_appends_and_replies(tmp_path):
         assert len(svc.notifier.messages) == before + 1  # type: ignore[attr-defined]
 
 
-async def test_end_session_feedback_and_clear(tmp_path):
+async def test_end_session_captures_errors_and_clears(tmp_path):
     with open_services(_settings(tmp_path)) as svc:
         user = svc.settings.admin_user_id
         st = FakeState()
-        await start_speaking(svc, None, user, st)
-        await handle_turn(svc, None, user, st, "Hello there.")
+        await start_practice(svc, None, user, st, "speak")
+        await handle_turn(svc, None, user, st, "I goes to school.")
 
         await end_session(svc, user, st)
         assert st.state is None and st.data == {}
+        # The stub LLM returns one SessionError -> it must be persisted.
+        assert svc.repo.top_session_errors(user)[0]["error_text"] == "I goes"
         assert "Practice complete" in svc.notifier.messages[-1].text  # type: ignore[attr-defined]

@@ -10,27 +10,17 @@ def test_defaults_are_offline_stubs():
     assert s.llm_backend == "stub"
     assert s.notifier_backend == "stub"
     assert s.anki_backend == "genanki"
-    assert s.channel_ids == []  # TG scraping disabled by default
+    assert s.anki_deck == "English::Errors"
+    assert s.practice_push_cron == "23 19 * * 1,3,5"
 
 
 def test_loads_from_env_file(tmp_path):
     env = tmp_path / ".env"
     env.write_text(
-        "BOT_TOKEN=secret-123\n"
-        "LLM_BACKEND=ollama\n"
-        "SCRAPE_CHANNELS=10, 20 ,30\n"
-        "HERMES_ENABLED=true\n",
+        "BOT_TOKEN=secret-123\nLLM_BACKEND=ollama\nHERMES_ENABLED=true\n",
         encoding="utf-8",
     )
     s = Settings(_env_file=env)
     assert s.bot_token == "secret-123"
     assert s.llm_backend == "ollama"
-    assert s.channel_ids == [10, 20, 30]
     assert s.hermes_enabled is True
-
-
-def test_blank_api_id_becomes_none(tmp_path):
-    env = tmp_path / ".env"
-    env.write_text("TG_API_ID=\n", encoding="utf-8")
-    s = Settings(_env_file=env)
-    assert s.tg_api_id is None

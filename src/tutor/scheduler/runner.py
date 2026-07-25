@@ -2,19 +2,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from tutor.config import Settings, get_settings
-from tutor.scheduler.jobs import (
-    daytime_checkin,
-    essay_reminder,
-    evening_reminder,
-    morning_push,
-    refresh_content,
-    speaking_reminder,
-    weekly_summary,
-)
+from tutor.scheduler.jobs import push_practice, weekly_summary
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -22,54 +14,24 @@ if TYPE_CHECKING:
     from tutor.factory import Services
 
 
-def build_scheduler(svc: Services, user_id: int) -> AsyncIOScheduler:
+def build_scheduler(
+    svc: Services, user_id: int, *, bot: Any = None, storage: Any = None
+) -> AsyncIOScheduler:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from apscheduler.triggers.cron import CronTrigger
 
-    from tutor.domain.enums import DeliveryStatus
+    if storage is None:
+        from aiogram.fsm.storage.memory import MemoryStorage
+
+        storage = MemoryStorage()
 
     tz = ZoneInfo(svc.settings.tz)
     scheduler = AsyncIOScheduler(timezone=tz)
     scheduler.add_job(
-        refresh_content,
-        CronTrigger.from_crontab(svc.settings.refresh_cron, timezone=tz),
-        args=[svc],
-        id="refresh_content",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        morning_push,
-        CronTrigger.from_crontab(svc.settings.morning_cron, timezone=tz),
-        args=[svc, user_id],
-        id="morning_push",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        daytime_checkin,
-        CronTrigger.from_crontab(svc.settings.daytime_checkin_cron, timezone=tz),
-        args=[svc, user_id],
-        id="daytime_checkin",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        evening_reminder,
-        CronTrigger.from_crontab(svc.settings.evening_cron, timezone=tz),
-        args=[svc, user_id],
-        id="evening_reminder",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        essay_reminder,
-        CronTrigger.from_crontab(svc.settings.essay_cron, timezone=tz),
-        args=[svc, user_id],
-        id="essay_reminder",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        speaking_reminder,
-        CronTrigger.from_crontab(svc.settings.speaking_cron, timezone=tz),
-        args=[svc, user_id],
-        id="speaking_reminder",
+        push_practice,
+        CronTrigger.from_crontab(svc.settings.practice_push_cron, timezone=tz),
+        args=[svc, user_id, bot, storage],
+        id="push_practice",
         replace_existing=True,
     )
     scheduler.add_job(
@@ -80,19 +42,10 @@ def build_scheduler(svc: Services, user_id: int) -> AsyncIOScheduler:
         replace_existing=True,
     )
 
-    # Log scheduler state at startup for diagnostics.
-    new_count = svc.repo.count_status(user_id, DeliveryStatus.NEW)
-    delivered_count = svc.repo.count_status(user_id, DeliveryStatus.DELIVERED)
-    reviewed_count = svc.repo.count_status(user_id, DeliveryStatus.REVIEWED)
-    cards = svc.repo.anki_card_count(user_id)
     svc.repo.log_job(
         "scheduler_start",
         "ok",
-        f"content: new={new_count} delivered={delivered_count} reviewed={reviewed_count} "
-        f"cards={cards} | crons: refresh={svc.settings.refresh_cron} "
-        f"morning={svc.settings.morning_cron} daytime={svc.settings.daytime_checkin_cron} "
-        f"evening={svc.settings.evening_cron} essay={svc.settings.essay_cron} "
-        f"speaking={svc.settings.speaking_cron} weekly={svc.settings.weekly_summary_cron} "
+        f"push={svc.settings.practice_push_cron} weekly={svc.settings.weekly_summary_cron} "
         f"tz={svc.settings.tz}",
     )
 
@@ -100,8 +53,16 @@ def build_scheduler(svc: Services, user_id: int) -> AsyncIOScheduler:
 
 
 async def run_scheduler(settings: Settings | None = None) -> None:
-    """Run the scheduler standalone (sends via a Telegram bot, no polling)."""
+    """Run the scheduler standalone (sends via a Telegram bot, no polling).
+
+    Note: the primary deployment runs the scheduler embedded in the bot
+    (`tutor bot`), where push_practice shares the polling bot's FSM storage. In
+    standalone mode a fresh MemoryStorage is used — the push still sends its
+    message, but the FSM state lives only in this process.
+    """
     import asyncio
+
+    from aiogram.fsm.storage.memory import MemoryStorage
 
     settings = settings or get_settings()
     if not settings.bot_token:
@@ -117,7 +78,7 @@ async def run_scheduler(settings: Settings | None = None) -> None:
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     with open_services(settings) as svc:
         svc.notifier = TelegramNotifier(bot)
-        scheduler = build_scheduler(svc, settings.admin_user_id)
+        scheduler = build_scheduler(svc, settings.admin_user_id, bot=bot, storage=MemoryStorage())
         scheduler.start()
         print("[tutor] scheduler running. Press Ctrl-C to stop.")
         try:

@@ -1,12 +1,11 @@
-"""Background scheduling: morning content push + evening evaluation."""
+"""Background scheduling: the practice push + weekly error summary."""
 
-from tutor.scheduler.jobs import evening_reminder, morning_push, refresh_content
+from tutor.scheduler.jobs import push_practice, weekly_summary
 from tutor.scheduler.runner import build_scheduler, run_scheduler
 
 __all__ = [
-    "evening_reminder",
-    "morning_push",
-    "refresh_content",
+    "push_practice",
+    "weekly_summary",
     "build_scheduler",
     "run_scheduler",
 ]
