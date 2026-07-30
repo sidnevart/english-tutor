@@ -10,9 +10,15 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 
+from tutor.catalog import BundledCatalog
+from tutor.catalog.replenisher import CatalogReplenisher, HttpSourceFetcher
 from tutor.config import Settings
 from tutor.db.repository import Repository
-from tutor.interfaces import AnkiSink, LLMClient, Notifier, Synthesizer, Transcriber
+from tutor.eval.rubric import RubricEvaluator
+from tutor.interfaces import LLMClient, Notifier, Synthesizer, Transcriber
+from tutor.practice.engine import PracticeEngine
+from tutor.practice.planner import DailyPlanner
+from tutor.progress.tracker import ProgressTracker
 
 
 def build_llm(settings: Settings) -> LLMClient:
@@ -23,10 +29,6 @@ def build_llm(settings: Settings) -> LLMClient:
             return OllamaLLMClient(
                 settings.ollama_base_url, settings.ollama_api_key, settings.ollama_model
             )
-        case "hermes":
-            from tutor.adapters.llm.hermes import build_hermes_client
-
-            return build_hermes_client(settings)
         case "mimo":
             from tutor.adapters.llm.mimo import MiMoLLMClient
 
@@ -50,37 +52,11 @@ def build_llm(settings: Settings) -> LLMClient:
 
 
 def build_notifier(settings: Settings) -> Notifier:
-    if settings.notifier_backend == "telegram":
-        from aiogram import Bot
-        from aiogram.client.default import DefaultBotProperties
-        from aiogram.enums import ParseMode
-
-        from tutor.adapters.notify.telegram import TelegramNotifier
-
-        bot = Bot(
-            settings.bot_token,
-            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-        )
-        return TelegramNotifier(bot)
+    # Polling owns the single aiogram Bot and replaces this adapter in bot.main.
+    # Other entry points (exports, tests, migrations) must not create an unclosed HTTP session.
     from tutor.adapters.notify.stub import StubNotifier
 
     return StubNotifier()
-
-
-def build_anki(settings: Settings) -> AnkiSink:
-    match settings.anki_backend:
-        case "ankiconnect":
-            from tutor.adapters.anki.ankiconnect import AnkiConnectSink
-
-            return AnkiConnectSink(settings.ankiconnect_url)
-        case "null":
-            from tutor.adapters.anki.null import NullSink
-
-            return NullSink()
-        case _:
-            from tutor.adapters.anki.genanki_sink import GenankiSink
-
-            return GenankiSink(settings.data_path)
 
 
 def build_transcriber(settings: Settings) -> Transcriber:
@@ -120,18 +96,40 @@ class Services:
     repo: Repository
     llm: LLMClient
     notifier: Notifier
-    anki: AnkiSink
     transcriber: Transcriber
     synthesizer: Synthesizer
+    catalog: BundledCatalog
+    planner: DailyPlanner
+    tracker: ProgressTracker
+    engine: PracticeEngine
+    evaluator: RubricEvaluator
+    replenisher: CatalogReplenisher
 
 
 def build_services(settings: Settings, conn: sqlite3.Connection) -> Services:
+    repo = Repository(conn)
+    llm = build_llm(settings)
+    synthesizer = build_synthesizer(settings)
+    catalog = BundledCatalog.load()
+    tracker = ProgressTracker(repo)
+    planner = DailyPlanner(repo, catalog)
+    tracker.migrate_legacy_errors()
+    engine = PracticeEngine(repo, tracker)
+    evaluator = RubricEvaluator(repo, llm, tracker)
+    replenisher = CatalogReplenisher(
+        repo, llm, HttpSourceFetcher(), synthesizer, settings.data_path / "catalog_audio"
+    )
     return Services(
         settings=settings,
-        repo=Repository(conn),
-        llm=build_llm(settings),
+        repo=repo,
+        llm=llm,
         notifier=build_notifier(settings),
-        anki=build_anki(settings),
         transcriber=build_transcriber(settings),
-        synthesizer=build_synthesizer(settings),
+        synthesizer=synthesizer,
+        catalog=catalog,
+        planner=planner,
+        tracker=tracker,
+        engine=engine,
+        evaluator=evaluator,
+        replenisher=replenisher,
     )

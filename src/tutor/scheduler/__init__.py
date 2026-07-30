@@ -1,11 +1,17 @@
-"""Background scheduling: the practice push + weekly error summary."""
+"""Background scheduling for daily practice and maintenance."""
 
-from tutor.scheduler.jobs import push_practice, weekly_summary
-from tutor.scheduler.runner import build_scheduler, run_scheduler
+from tutor.scheduler.jobs import (
+    expire_attempts,
+    push_daily_plan,
+    replenish_catalog,
+    retry_evaluations,
+)
+from tutor.scheduler.runner import build_scheduler
 
 __all__ = [
-    "push_practice",
-    "weekly_summary",
     "build_scheduler",
-    "run_scheduler",
+    "expire_attempts",
+    "push_daily_plan",
+    "replenish_catalog",
+    "retry_evaluations",
 ]

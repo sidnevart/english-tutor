@@ -20,8 +20,14 @@ else
 fi
 cd "$APP_DIR"
 
-# 3. Install dependencies (incl. the Telegram scraper extra).
-"$UV" sync --extra scrape
+# 3. Install runtime dependencies.
+"$UV" sync
+
+# Groq TTS transcodes WAV output to Telegram-compatible OGG/Opus.
+if ! command -v ffmpeg >/dev/null 2>&1; then
+  apt-get update
+  apt-get install -y ffmpeg
+fi
 
 cat <<'NOTE'
 
@@ -30,13 +36,12 @@ cat <<'NOTE'
 One-time manual steps (secrets are intentionally NOT in git):
 
   1. Create /opt/english-tutor/.env from .env.example and fill at least:
-       BOT_TOKEN, TG_API_ID, TG_API_HASH, ADMIN_USER_ID, LLM_BACKEND=ollama
-  2. Copy your Telegram session to /opt/english-tutor/bot_data/
-       (telegram_e2e_session.session)
-  3. Install Ollama and sign in (glm-5:cloud is cloud-routed):
+       BOT_TOKEN, ADMIN_USER_ID, NOTIFIER_BACKEND=telegram,
+       LLM_BACKEND=ollama, STT_BACKEND=cloud, TTS_BACKEND=groq
+  2. Install Ollama and sign in (glm-5:cloud is cloud-routed):
        curl -fsSL https://ollama.com/install.sh | sh
        ollama signin
-  4. Install and start the service:
+  3. Install and start the service:
        cp deploy/english-tutor-bot.service /etc/systemd/system/
        systemctl daemon-reload
        systemctl enable --now english-tutor-bot

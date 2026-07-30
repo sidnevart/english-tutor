@@ -7,34 +7,13 @@ import typing
 
 from pydantic import BaseModel
 
-from tutor.eval.schemas import SessionError, SessionFeedbackPayload
-
 
 class StubLLMClient:
     async def complete(self, system: str, user: str) -> str:
         return f"[stub-llm reply] {user.strip()[:120]}"
 
     async def complete_json[T: BaseModel](self, system: str, user: str, schema: type[T]) -> T:
-        if schema is SessionFeedbackPayload:
-            return typing.cast(T, _stub_session_feedback())
         return _build_generic(schema)
-
-
-def _stub_session_feedback() -> SessionFeedbackPayload:
-    """A practice feedback with one grammar error, so end_session captures it."""
-    return SessionFeedbackPayload(
-        strengths=["Clear ideas."],
-        errors=[
-            SessionError(
-                type="grammar",
-                error="I goes",
-                correction="I go",
-                context="I goes to school every day.",
-            )
-        ],
-        recurring_fixed=[],
-        assessment="Good attempt; watch subject-verb agreement.",
-    )
 
 
 def _build_generic[T: BaseModel](schema: type[T]) -> T:

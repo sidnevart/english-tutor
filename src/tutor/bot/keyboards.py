@@ -11,7 +11,7 @@ from tutor.interfaces.notifier import Keyboard
 def reset_confirm() -> Keyboard:
     """Confirmation keyboard for the /reset command."""
     return [
-        [("✅ Yes, wipe my diary", "reset:confirm")],
+        [("✅ Yes, erase my progress", "reset:confirm")],
         [("❌ Cancel", "reset:cancel")],
     ]
 

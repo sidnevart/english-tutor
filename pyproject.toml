@@ -12,14 +12,12 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.5",
     # bot UX
-    "aiogram>=3.13",
+    "aiogram>=3.26,<3.29",
     # scheduling
     "apscheduler>=3.10,<4",
     # LLM access (OpenAI-compatible Ollama endpoint)
     "openai>=1.50",
     "httpx>=0.27",
-    # Anki card generation (.apkg) — for the /diary error deck
-    "genanki>=0.13",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +29,7 @@ tts = ["edge-tts>=6.1"]
 
 [dependency-groups]
 dev = [
+    "mypy>=1.15",
     "pytest>=8.2",
     "pytest-asyncio>=0.24",
     "ruff>=0.6",
@@ -57,3 +56,18 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/tutor"]
+check_untyped_defs = true
+ignore_missing_imports = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = "tutor.bot.handlers"
+disable_error_code = ["union-attr"]
+
+[[tool.mypy.overrides]]
+module = "tutor.bot.main"
+disable_error_code = ["arg-type"]

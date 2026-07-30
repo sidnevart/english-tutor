@@ -1,110 +1,91 @@
-"""Scheduled jobs for the error-diary loop.
-
-  Mon/Wed/Fri ~19:23 — push_practice: the bot opens a speaking or writing
-                     session (alternating) so the learner practises and errors
-                     get captured into session_error.
-  Sunday ~10:47     — weekly_summary: error trend + recurring errors + study tips.
-
-The bot embeds the scheduler (`run_bot`), so `push_practice` shares the polling
-bot's FSM storage: entering `ConversationState.active` here means the learner's
-reply is handled by the normal in-session handlers.
-"""
+"""Idempotent daily delivery and background maintenance jobs."""
 
 from __future__ import annotations
 
-from typing import Any
+from datetime import UTC, date, datetime
+from zoneinfo import ZoneInfo
 
-from tutor.factory import Services
+from tutor.bot.views import render_plan
+from tutor.catalog.replenisher import CatalogReplenisher
+from tutor.db.repository import Repository
+from tutor.eval.rubric import RubricEvaluator
+from tutor.interfaces.notifier import Notifier
+from tutor.practice.engine import PracticeEngine
+from tutor.practice.models import TaskType
+from tutor.practice.planner import DailyPlanner
 
-
-async def push_practice(svc: Services, user_id: int, bot: Any, storage: Any) -> None:
-    """Start a practice session on schedule (alternates speak ↔ write).
-
-    Enters `ConversationState.active` via the shared FSM storage so the
-    learner's reply flows into the normal capture path. Skips (and nudges) if a
-    session is already open.
-    """
-    try:
-        from aiogram.fsm.context import FSMContext
-        from aiogram.fsm.storage.base import StorageKey
-
-        from tutor.bot.conversation import ConversationState, start_practice
-
-        bot_id = bot.id if bot is not None else 0
-        key = StorageKey(bot_id=bot_id, chat_id=user_id, user_id=user_id)
-        state = FSMContext(storage=storage, key=key)
-
-        current = await state.get_state()
-        if current == ConversationState.active:
-            await svc.notifier.send(
-                user_id,
-                "👋 You still have an open practice — reply or /stop to finish it first.",
-            )
-            svc.repo.log_job("push_practice", "skipped", "session active")
-            return
-
-        kind = str(svc.repo.get_pref(user_id, "next_practice", "speak") or "speak")
-        if kind not in ("speak", "write"):
-            kind = "speak"
-        await start_practice(svc, bot, user_id, state, kind)
-        svc.repo.set_pref(user_id, "next_practice", "write" if kind == "speak" else "speak")
-        svc.repo.log_job("push_practice", "ok", kind)
-    except Exception as exc:  # noqa: BLE001 — a job failure must never crash the scheduler
-        svc.repo.log_job("push_practice", "error", str(exc)[:200])
+CATALOG_RESERVE_TARGETS = {
+    TaskType.COMPLETE_WORDS: 5,
+    TaskType.DAILY_LIFE: 5,
+    TaskType.ACADEMIC_PASSAGE: 5,
+    TaskType.LISTEN_REPEAT: 7,
+    TaskType.INTERVIEW: 7,
+    TaskType.BUILD_SENTENCE: 3,
+    TaskType.EMAIL: 3,
+    TaskType.ACADEMIC_DISCUSSION: 3,
+}
 
 
-async def weekly_summary(svc: Services, user_id: int) -> None:
-    """Weekly error-trend summary: streak, error trend, recurring errors, tips."""
-    try:
-        streak = svc.repo.practice_streak(user_id)
-        top_errors = svc.repo.top_session_errors(user_id, limit=5)
-        diary = svc.repo.error_diary(user_id)
-        distinct = len(diary)
-        total = sum(int(r["count"]) for r in diary)
+async def push_daily_plan(
+    repo: Repository,
+    planner: DailyPlanner,
+    notifier: Notifier,
+    user_id: int,
+    *,
+    local_date: date | None = None,
+    timezone: str = "Europe/Moscow",
+) -> bool:
+    local_date = local_date or datetime.now(ZoneInfo(timezone)).date()
+    plan = planner.ensure_plan(user_id, local_date)
+    if repo.plan_notified(user_id, local_date.isoformat()):
+        repo.log_job("push_daily_plan", "skipped", local_date.isoformat())
+        return False
+    text, keyboard = render_plan(plan)
+    await notifier.send(user_id, text, keyboard)
+    repo.mark_plan_notified(user_id, local_date.isoformat())
+    repo.log_job("push_daily_plan", "ok", local_date.isoformat())
+    return True
 
-        parts = [
-            "📊 <b>Weekly summary</b>\n",
-            f"🔥 Streak: <b>{streak} day(s)</b>",
-            f"• <b>{total}</b> errors captured across <b>{distinct}</b> distinct mistakes",
-        ]
 
-        errors_by_week = svc.repo.error_count_by_week(user_id, weeks=4)
-        if errors_by_week:
-            trend = ""
-            if len(errors_by_week) >= 2:
-                diff = errors_by_week[-1]["count"] - errors_by_week[-2]["count"]
-                trend = " ↑" if diff > 0 else (" ↓" if diff < 0 else " →")
-            week_strs = [f"{r['week']} {r['count']}" for r in errors_by_week]
-            parts.append("\n<b>⚠️ Errors per week:</b>" + trend)
-            parts.append("  " + " · ".join(week_strs))
+async def retry_evaluations(evaluator: RubricEvaluator) -> None:
+    completed = await evaluator.retry_pending()
+    evaluator.repo.log_job("retry_evaluations", "ok", f"completed={completed}")
 
-        if top_errors:
-            parts.append("\n<b>🔄 Top recurring errors:</b>")
-            for e in top_errors:
-                parts.append(f'  • "{e["error_text"]}" → "{e["correction"]}" ({e["count"]}x)')
 
-        # LLM study tips keyed on the learner's error patterns.
-        try:
-            from tutor.memory.context import build_learner_context
-
-            ctx = build_learner_context(svc.repo, user_id, svc.settings.soul_dir)
-            rec = await svc.llm.complete(
-                "You are an English practice coach. Based on this learner's error "
-                "patterns, give exactly 2 specific, actionable study tips for the week "
-                "ahead, each targeting a recurring mistake class. One sentence each. "
-                "Plain text, one per line.",
-                f"LEARNER PROFILE:\n{ctx}",
-            )
-            parts.append(f"\n<b>💡 Study tips:</b>\n{rec.strip()}")
-        except Exception:  # noqa: BLE001
-            parts.append(
-                "\n<b>💡 Study tips:</b>\n  • Run /speak or /write daily and review /diary."
-            )
-
-        parts.append("\n📥 /diary exports your full error log (md / csv / Anki).")
-        await svc.notifier.send(user_id, "\n".join(parts))
-        svc.repo.log_job(
-            "weekly_summary", "ok", f"streak={streak} distinct={distinct} total={total}"
+async def expire_attempts(engine: PracticeEngine, notifier: Notifier) -> None:
+    attempts = engine.expire_overdue()
+    for attempt in attempts:
+        await notifier.send(
+            attempt.user_id,
+            "⏱ The writing deadline passed. The block was saved as incomplete; "
+            "open /today to continue.",
         )
-    except Exception as exc:  # noqa: BLE001
-        svc.repo.log_job("weekly_summary", "error", str(exc)[:200])
+    engine.repo.log_job("expire_attempts", "ok", f"expired={len(attempts)}")
+
+
+async def replenish_catalog(
+    repo: Repository,
+    builder: CatalogReplenisher | None = None,
+    source_urls: list[str] | None = None,
+    batch_size: int = 3,
+    user_id: int = 0,
+) -> None:
+    if builder is None or not source_urls:
+        repo.log_job("replenish_catalog", "skipped", "no builder or sources configured")
+        return
+    deficits = [
+        task_type
+        for task_type, target in CATALOG_RESERVE_TARGETS.items()
+        for _ in range(max(0, target - repo.unseen_catalog_count(user_id, task_type.value)))
+    ]
+    if not deficits:
+        repo.log_job("replenish_catalog", "skipped", "14-day unseen reserve is full")
+        return
+    week = datetime.now(UTC).isocalendar().week
+    accepted = 0
+    attempted = min(batch_size, len(deficits))
+    for offset, task_type in enumerate(deficits[:attempted]):
+        source = source_urls[(week + offset) % len(source_urls)]
+        if await builder.build_one(source, task_type) is not None:
+            accepted += 1
+    repo.log_job("replenish_catalog", "ok", f"accepted={accepted}/{attempted}")

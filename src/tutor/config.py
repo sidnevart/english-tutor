@@ -13,10 +13,9 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-LLMBackend = Literal["stub", "ollama", "hermes", "mimo", "ollama_mimo"]
+LLMBackend = Literal["stub", "ollama", "mimo", "ollama_mimo"]
 STTBackend = Literal["stub", "whisper", "cloud"]
 TTSBackend = Literal["stub", "groq", "edge", "openai", "cloud"]
-AnkiBackend = Literal["genanki", "ankiconnect", "null"]
 NotifierBackend = Literal["stub", "telegram"]
 
 
@@ -46,12 +45,7 @@ class Settings(BaseSettings):
     llm_backend: LLMBackend = "stub"
     stt_backend: STTBackend = "stub"
     tts_backend: TTSBackend = "stub"
-    anki_backend: AnkiBackend = "genanki"
     notifier_backend: NotifierBackend = "stub"
-
-    # ---- Anki ----
-    ankiconnect_url: str = "http://localhost:8765"
-    anki_deck: str = "English::Errors"
 
     # ---- STT/TTS cloud (optional) ----
     groq_api_key: str = ""
@@ -61,20 +55,18 @@ class Settings(BaseSettings):
     tts_model: str = ""  # blank -> canopylabs/orpheus-v1-english (Groq)
     tts_voice: str = "troy"  # Groq Orpheus voice (troy | hannah | austin | ...)
 
-    # ---- Hermes (optional; conversational plane only, never graded path) ----
-    hermes_enabled: bool = False
-    hermes_home: str = ""
-    hermes_base_url: str = ""  # OpenAI-compatible endpoint for conversational turns
-    hermes_model: str = ""
-    hermes_api_key: str = ""
-
     # ---- Schedule / paths ----
     tz: str = "Europe/Moscow"
-    practice_push_cron: str = "23 19 * * 1,3,5"  # Mon/Wed/Fri 19:23 — bot starts a practice
-    weekly_summary_cron: str = "47 10 * * 0"  # Sunday 10:47 — error-trend summary
+    practice_push_cron: str = "0 8 * * *"  # Daily 08:00 in the configured timezone
+    catalog_replenish_cron: str = "0 4 * * 0"  # Sunday 04:00 — maintain unseen reserve
+    catalog_source_urls: str = (
+        "https://science.nasa.gov/universe/,"
+        "https://oceanservice.noaa.gov/facts/,"
+        "https://www.si.edu/spotlight"
+    )
+    catalog_batch_size: int = 3
     db_path: str = "data/tutor.db"
     data_dir: str = "data"
-    soul_dir: str = "soul"
 
     @property
     def db_file(self) -> Path:
@@ -85,13 +77,13 @@ class Settings(BaseSettings):
         return Path(self.data_dir)
 
     @property
-    def soul_path(self) -> Path:
-        return Path(self.soul_dir)
-
-    @property
     def voice_enabled(self) -> bool:
         """Whether the bot should send voice replies (a real TTS backend is set)."""
         return self.tts_backend != "stub"
+
+    @property
+    def catalog_sources(self) -> list[str]:
+        return [url.strip() for url in self.catalog_source_urls.split(",") if url.strip()]
 
 
 @lru_cache

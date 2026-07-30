@@ -1,91 +1,85 @@
-"""Scheduler jobs (offline): push_practice alternation + weekly error summary."""
-
 from __future__ import annotations
 
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.base import StorageKey
-from aiogram.fsm.storage.memory import MemoryStorage
+from datetime import date
 
-from tutor.app import open_services
-from tutor.bot.conversation import ConversationState
-from tutor.config import Settings
-from tutor.scheduler.jobs import push_practice, weekly_summary
-from tutor.scheduler.runner import build_scheduler
+from conftest import TEST_USER
+
+from tutor.catalog import BundledCatalog
+from tutor.practice.planner import DailyPlanner
+from tutor.scheduler.jobs import CATALOG_RESERVE_TARGETS, push_daily_plan, replenish_catalog
 
 
-def _settings(tmp_path, tz: str = "UTC") -> Settings:
-    return Settings(
-        _env_file=None,
-        db_path=str(tmp_path / "t.db"),
-        data_dir=str(tmp_path / "data"),
-        llm_backend="stub",
-        notifier_backend="stub",
-        anki_backend="genanki",
-        tz=tz,
-        soul_dir=str(tmp_path / "soul"),
+class FakeNotifier:
+    def __init__(self) -> None:
+        self.messages = []
+
+    async def send(self, user_id, text, keyboard=None):
+        self.messages.append((user_id, text, keyboard))
+        return len(self.messages)
+
+
+async def test_daily_push_creates_one_plan_and_is_idempotent(repo) -> None:
+    notifier = FakeNotifier()
+    planner = DailyPlanner(repo, BundledCatalog.load())
+    local_day = date(2026, 7, 30)
+
+    first = await push_daily_plan(repo, planner, notifier, TEST_USER, local_date=local_day)
+    second = await push_daily_plan(repo, planner, notifier, TEST_USER, local_date=local_day)
+
+    assert first is True
+    assert second is False
+    assert len(notifier.messages) == 1
+    assert "Reading" in notifier.messages[0][1]
+    assert "Speaking" in notifier.messages[0][1]
+    assert "Writing" in notifier.messages[0][1]
+    assert notifier.messages[0][2][0][0][1].startswith("practice:")
+
+
+def test_scheduler_uses_eight_am_moscow_and_background_jobs(repo):
+    from tutor.adapters.llm.stub import StubLLMClient
+    from tutor.config import Settings
+    from tutor.eval.rubric import RubricEvaluator
+    from tutor.progress.tracker import ProgressTracker
+    from tutor.scheduler.runner import build_scheduler
+
+    settings = Settings(_env_file=None)
+    planner = DailyPlanner(repo, BundledCatalog.load())
+    evaluator = RubricEvaluator(repo, StubLLMClient(), ProgressTracker(repo))
+    scheduler = build_scheduler(repo, planner, FakeNotifier(), evaluator, settings, TEST_USER)
+
+    jobs = {job.id: job for job in scheduler.get_jobs()}
+    assert set(jobs) == {
+        "push_daily_plan",
+        "retry_evaluations",
+        "expire_attempts",
+        "replenish_catalog",
+    }
+    assert "hour='8'" in str(jobs["push_daily_plan"].trigger)
+    assert str(scheduler.timezone) == "Europe/Moscow"
+
+
+async def test_replenishment_targets_only_catalog_types_below_reserve(repo) -> None:
+    class Builder:
+        def __init__(self) -> None:
+            self.types = []
+
+        async def build_one(self, source, task_type):
+            self.types.append(task_type)
+            return object()
+
+    repo.seed_catalog(BundledCatalog.load().tasks)
+    builder = Builder()
+
+    await replenish_catalog(
+        repo,
+        builder,
+        ["https://www.nasa.gov/example"],
+        batch_size=8,
+        user_id=TEST_USER,
     )
 
-
-class _FakeBot:
-    id = 123456789
-
-
-def _state(storage: MemoryStorage, user_id: int) -> FSMContext:
-    return FSMContext(
-        storage=storage, key=StorageKey(bot_id=_FakeBot.id, chat_id=user_id, user_id=user_id)
+    assert builder.types == []
+    assert all(
+        repo.unseen_catalog_count(TEST_USER, task_type.value) >= target
+        for task_type, target in CATALOG_RESERVE_TARGETS.items()
     )
-
-
-async def test_push_practice_starts_and_flips(tmp_path):
-    with open_services(_settings(tmp_path)) as svc:
-        uid = svc.settings.admin_user_id
-        storage = MemoryStorage()
-
-        assert svc.repo.get_pref(uid, "next_practice", "speak") == "speak"
-        await push_practice(svc, uid, _FakeBot(), storage)
-
-        assert svc.notifier.messages  # the practice opener was sent
-        assert svc.repo.get_pref(uid, "next_practice") == "write"  # flipped
-        assert await _state(storage, uid).get_state() == ConversationState.active
-
-
-async def test_push_practice_alternates_back_to_speak(tmp_path):
-    with open_services(_settings(tmp_path)) as svc:
-        uid = svc.settings.admin_user_id
-        storage = MemoryStorage()
-        st = _state(storage, uid)
-        await push_practice(svc, uid, _FakeBot(), storage)  # speak -> write
-        await st.clear()  # simulate /stop ending the session
-        await push_practice(svc, uid, _FakeBot(), storage)  # write -> speak
-        assert svc.repo.get_pref(uid, "next_practice") == "speak"
-
-
-async def test_push_practice_skips_when_session_active(tmp_path):
-    with open_services(_settings(tmp_path)) as svc:
-        uid = svc.settings.admin_user_id
-        storage = MemoryStorage()
-        await _state(storage, uid).set_state(ConversationState.active)
-
-        await push_practice(svc, uid, _FakeBot(), storage)
-
-        last = svc.notifier.messages[-1]
-        assert "open practice" in last.text
-        assert svc.repo.get_pref(uid, "next_practice", "speak") == "speak"  # unchanged
-
-
-async def test_weekly_summary_reports_errors(tmp_path):
-    with open_services(_settings(tmp_path)) as svc:
-        uid = svc.settings.admin_user_id
-        svc.repo.save_session_errors(
-            uid, "speak", [{"type": "grammar", "error": "I goes", "correction": "I go"}]
-        )
-        await weekly_summary(svc, uid)
-        last = svc.notifier.messages[-1]
-        assert "Weekly summary" in last.text
-        assert "I goes" in last.text
-
-
-async def test_build_scheduler_registers_jobs(tmp_path):
-    with open_services(_settings(tmp_path)) as svc:
-        scheduler = build_scheduler(svc, svc.settings.admin_user_id)
-        assert {j.id for j in scheduler.get_jobs()} == {"push_practice", "weekly_summary"}

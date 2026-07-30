@@ -1,71 +1,41 @@
-# Deploying english-tutor to the VPS (CI/CD)
+# Deploying english-tutor
 
-Two GitHub Actions workflows:
+CI runs lint, formatting, catalog validation, and tests. A push to `main` then triggers the SSH deployment workflow when the repository variable `DEPLOY_ENABLED=true`.
 
-- **CI** (`.github/workflows/ci.yml`) — runs `ruff` + `pytest` on every push/PR.
-- **Deploy** (`.github/workflows/deploy.yml`) — on push to `main`, SSHes into the
-  VPS, pulls, `uv sync`, and restarts the systemd service. It is **gated** by the
-  `DEPLOY_ENABLED` repo variable, so it stays dormant until you opt in.
-
-## 1. One-time server bootstrap
-
-SSH into the VPS and run the bootstrap (clones to `/opt/english-tutor`, installs
-uv + deps):
+## One-time VPS setup
 
 ```bash
 ssh root@80.74.25.43
 curl -fsSL https://raw.githubusercontent.com/sidnevart/english-tutor/main/deploy/bootstrap.sh | bash
 ```
 
-Then complete the manual, secret steps it prints:
+Create `/opt/english-tutor/.env` from `.env.example`. Set the Telegram token and user ID, real STT/TTS backends for Speaking, and an LLM backend for open-response grading and replenishment. Then install the systemd unit:
 
-1. Create `/opt/english-tutor/.env` from `.env.example` (BOT_TOKEN, TG_API_ID,
-   TG_API_HASH, ADMIN_USER_ID, `LLM_BACKEND=ollama`, …).
-2. Copy your Telegram session to `/opt/english-tutor/bot_data/`.
-3. Install Ollama and `ollama signin` (needed for the cloud-routed `glm-5:cloud`).
-4. Install + start the service:
-   ```bash
-   cd /opt/english-tutor
-   cp deploy/english-tutor-bot.service /etc/systemd/system/
-   systemctl daemon-reload
-   systemctl enable --now english-tutor-bot
-   ```
-
-`tutor bot` runs the bot **and** the embedded scheduler (morning push + evening
-eval). Logs: `journalctl -u english-tutor-bot -f`.
-
-## 2. Enable CI/CD auto-deploy
-
-In the GitHub repo settings:
-
-- **Variables** → add `DEPLOY_ENABLED = true`.
-- **Secrets** → add:
-  - `VPS_HOST` = `80.74.25.43`
-  - `VPS_USER` = `root`
-  - `VPS_SSH_KEY` = a private key whose public half is in the VPS
-    `~/.ssh/authorized_keys` (recommended), **or** switch the workflow to
-    `password: ${{ secrets.VPS_PASSWORD }}` and add `VPS_PASSWORD`.
-
-Now every push to `main` deploys automatically. Trigger manually any time via
-the **Deploy** workflow's "Run workflow" button.
-
-## 3. Scheduled content
-
-The embedded scheduler runs three jobs (cron from `.env`, in `TZ`):
-
-- `refresh_content` (`REFRESH_CRON`, default 07:00) — scrape channels + ingest podcasts
-- `morning_push` (`MORNING_CRON`, default 07:30) — deliver new readings
-- `evening_eval` (`EVENING_CRON`, default 20:00) — prepare quizzes + nudge
-
-No system cron needed — it's all in-process. Seed content immediately with one
-manual run:
+The bootstrap also installs `ffmpeg`, which the Groq TTS adapter uses to produce Telegram-compatible OGG/Opus audio.
 
 ```bash
-cd /opt/english-tutor && /root/.local/bin/uv run tutor scrape && /root/.local/bin/uv run tutor ingest
+cd /opt/english-tutor
+cp deploy/english-tutor-bot.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now english-tutor-bot
+journalctl -u english-tutor-bot -f
 ```
 
-## Notes
+The single `tutor bot` process runs polling and four embedded jobs in `TZ`:
 
-- Secrets (`.env`, `bot_data/`) are never in git; they live only on the server.
-- The deploy step is idempotent: pull → sync → restart.
-- Roll back by checking out a previous commit on the server and restarting.
+- daily plan delivery (`PRACTICE_PUSH_CRON`, default 08:00);
+- writing deadline closure (every minute);
+- pending rubric retries (every 15 minutes);
+- catalog replenishment (`CATALOG_REPLENISH_CRON`, Sunday 04:00).
+
+SQLite data in `/opt/english-tutor/data` survives code deployments. Startup creates new tables and migrates legacy `session_error` rows without deleting the old database.
+
+## GitHub settings
+
+Set `DEPLOY_ENABLED=true` and these secrets:
+
+- `VPS_HOST`
+- `VPS_USER`
+- `VPS_SSH_KEY`
+
+Every successful push to `main` pulls the new commit, runs `uv sync`, and restarts `english-tutor-bot`.

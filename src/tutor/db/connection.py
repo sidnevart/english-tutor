@@ -35,12 +35,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     SQLite has no ``ADD COLUMN IF NOT EXISTS``, so we check ``PRAGMA table_info``
     first. Each migration is idempotent.
     """
-    # Note: tables removed in the error-diary repivot (content_item, quiz*,
-    # vocab_item, anki_card, essay, speaking_attempt, topic_progress,
-    # worksheet, writing_task, channel_watermark) are NOT auto-dropped here —
-    # dropping is destructive and must not run on every boot. Existing DBs keep
-    # the old tables harmlessly (unused); for a clean slate delete the .db file
-    # (single-user bot) or run a one-shot DROP noted in the deploy docs.
+    # Old deployments may still contain retired tables. They remain harmlessly
+    # untouched because boot-time migrations must never destroy user data.
     additions: list[tuple[str, str, str]] = [
         # table, column, column definition — empty for now; add future additive
         # column migrations here (each checked via PRAGMA table_info).

@@ -1,5 +1,5 @@
-"""Error-capture schemas used across the practice flows."""
+"""Structured TOEFL rubric evaluation."""
 
-from tutor.eval.schemas import SessionError, SessionFeedbackPayload
+from tutor.eval.rubric import RubricEvaluation, RubricEvaluator, RubricIssue
 
-__all__ = ["SessionError", "SessionFeedbackPayload"]
+__all__ = ["RubricEvaluation", "RubricEvaluator", "RubricIssue"]

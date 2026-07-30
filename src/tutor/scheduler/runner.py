@@ -1,87 +1,73 @@
-"""Build and run the APScheduler instance (embedded in the bot, or standalone)."""
+"""APScheduler wiring for the focused TOEFL loop."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from functools import partial
 from zoneinfo import ZoneInfo
 
-from tutor.config import Settings, get_settings
-from tutor.scheduler.jobs import push_practice, weekly_summary
-
-if TYPE_CHECKING:
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
-    from tutor.factory import Services
+from tutor.catalog.replenisher import CatalogReplenisher
+from tutor.config import Settings
+from tutor.db.repository import Repository
+from tutor.eval.rubric import RubricEvaluator
+from tutor.interfaces.notifier import Notifier
+from tutor.practice.engine import PracticeEngine
+from tutor.practice.planner import DailyPlanner
+from tutor.scheduler.jobs import (
+    expire_attempts,
+    push_daily_plan,
+    replenish_catalog,
+    retry_evaluations,
+)
 
 
 def build_scheduler(
-    svc: Services, user_id: int, *, bot: Any = None, storage: Any = None
-) -> AsyncIOScheduler:
+    repo: Repository,
+    planner: DailyPlanner,
+    notifier: Notifier,
+    evaluator: RubricEvaluator,
+    settings: Settings,
+    user_id: int,
+    engine: PracticeEngine | None = None,
+    replenisher: CatalogReplenisher | None = None,
+):
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from apscheduler.triggers.cron import CronTrigger
 
-    if storage is None:
-        from aiogram.fsm.storage.memory import MemoryStorage
-
-        storage = MemoryStorage()
-
-    tz = ZoneInfo(svc.settings.tz)
+    tz = ZoneInfo(settings.tz)
     scheduler = AsyncIOScheduler(timezone=tz)
     scheduler.add_job(
-        push_practice,
-        CronTrigger.from_crontab(svc.settings.practice_push_cron, timezone=tz),
-        args=[svc, user_id, bot, storage],
-        id="push_practice",
+        partial(push_daily_plan, repo, planner, notifier, user_id, timezone=settings.tz),
+        CronTrigger.from_crontab(settings.practice_push_cron, timezone=tz),
+        id="push_daily_plan",
         replace_existing=True,
     )
     scheduler.add_job(
-        weekly_summary,
-        CronTrigger.from_crontab(svc.settings.weekly_summary_cron, timezone=tz),
-        args=[svc, user_id],
-        id="weekly_summary",
+        retry_evaluations,
+        "interval",
+        minutes=15,
+        args=[evaluator],
+        id="retry_evaluations",
         replace_existing=True,
     )
-
-    svc.repo.log_job(
+    scheduler.add_job(
+        expire_attempts,
+        "interval",
+        minutes=1,
+        args=[engine or PracticeEngine(repo), notifier],
+        id="expire_attempts",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        replenish_catalog,
+        CronTrigger.from_crontab(settings.catalog_replenish_cron, timezone=tz),
+        args=[repo, replenisher, settings.catalog_sources, settings.catalog_batch_size, user_id],
+        id="replenish_catalog",
+        replace_existing=True,
+    )
+    repo.log_job(
         "scheduler_start",
         "ok",
-        f"push={svc.settings.practice_push_cron} weekly={svc.settings.weekly_summary_cron} "
-        f"tz={svc.settings.tz}",
+        f"daily={settings.practice_push_cron} "
+        f"catalog={settings.catalog_replenish_cron} tz={settings.tz}",
     )
-
     return scheduler
-
-
-async def run_scheduler(settings: Settings | None = None) -> None:
-    """Run the scheduler standalone (sends via a Telegram bot, no polling).
-
-    Note: the primary deployment runs the scheduler embedded in the bot
-    (`tutor bot`), where push_practice shares the polling bot's FSM storage. In
-    standalone mode a fresh MemoryStorage is used — the push still sends its
-    message, but the FSM state lives only in this process.
-    """
-    import asyncio
-
-    from aiogram.fsm.storage.memory import MemoryStorage
-
-    settings = settings or get_settings()
-    if not settings.bot_token:
-        raise RuntimeError("BOT_TOKEN is required to run the scheduler (see .env).")
-
-    from aiogram import Bot
-    from aiogram.client.default import DefaultBotProperties
-    from aiogram.enums import ParseMode
-
-    from tutor.adapters.notify.telegram import TelegramNotifier
-    from tutor.app import open_services
-
-    bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    with open_services(settings) as svc:
-        svc.notifier = TelegramNotifier(bot)
-        scheduler = build_scheduler(svc, settings.admin_user_id, bot=bot, storage=MemoryStorage())
-        scheduler.start()
-        print("[tutor] scheduler running. Press Ctrl-C to stop.")
-        try:
-            await asyncio.Event().wait()
-        finally:
-            scheduler.shutdown(wait=False)

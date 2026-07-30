@@ -38,14 +38,23 @@ async def run_bot(settings: Settings | None = None) -> None:
         # The slash menu shown when the user types "/".
         await bot.set_my_commands([BotCommand(command=c, description=d) for c, d in COMMANDS])
 
-        me = await bot.get_me()  # resolves bot.id (needed by push_practice's FSM key)
-        scheduler = build_scheduler(svc, settings.admin_user_id, bot=bot, storage=dp.storage)
+        me = await bot.get_me()
+        scheduler = build_scheduler(
+            svc.repo,
+            svc.planner,
+            svc.notifier,
+            svc.evaluator,
+            settings,
+            settings.admin_user_id,
+            engine=svc.engine,
+            replenisher=svc.replenisher,
+        )
         scheduler.start()
         log.info(
-            "bot @%s polling; scheduler armed (push '%s', weekly '%s' %s)",
+            "bot @%s polling; scheduler armed (daily '%s', catalog '%s' %s)",
             me.username,
             settings.practice_push_cron,
-            settings.weekly_summary_cron,
+            settings.catalog_replenish_cron,
             settings.tz,
         )
         try:
