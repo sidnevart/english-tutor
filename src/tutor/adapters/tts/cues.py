@@ -6,8 +6,13 @@ import asyncio
 from pathlib import Path
 from uuid import uuid4
 
+from tutor.adapters.tts.quality import probe_duration
+
 
 class AudioCueComposer:
+    async def duration_seconds(self, path: Path) -> float:
+        return await probe_duration(path)
+
     async def add_terminal_beep(self, source: Path, output: Path) -> Path:
         source = Path(source)
         output = Path(output)

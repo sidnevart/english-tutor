@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import html
 import json
 import tempfile
@@ -107,10 +108,12 @@ async def _show_plan(svc: Services, user_id: int) -> None:
     await svc.notifier.send(user_id, text, keyboard)
 
 
-async def _send_audio(svc: Services, bot: object | None, user_id: int, attempt: Attempt) -> bool:
+async def _send_audio(
+    svc: Services, bot: object | None, user_id: int, attempt: Attempt
+) -> float | None:
     if bot is None:
         await svc.notifier.send(user_id, "Audio transport is unavailable; your place is saved.")
-        return False
+        return None
     texts = (
         attempt.payload["sentences"]
         if attempt.task_type is TaskType.LISTEN_REPEAT
@@ -125,6 +128,7 @@ async def _send_audio(svc: Services, bot: object | None, user_id: int, attempt: 
             cache_base = (
                 svc.settings.data_path
                 / "audio_cache"
+                / "tts-v2"
                 / attempt.task_id
                 / f"{attempt.current_item}.wav"
             )
@@ -139,22 +143,23 @@ async def _send_audio(svc: Services, bot: object | None, user_id: int, attempt: 
             cue_path = (
                 svc.settings.data_path
                 / "audio_cache"
-                / "listen-repeat-cue-v1"
+                / "listen-repeat-cue-v2"
                 / attempt.task_id
                 / f"{attempt.current_item}.ogg"
             )
             path = await svc.audio_cues.add_terminal_beep(path, cue_path)
+        duration_seconds = await svc.audio_cues.duration_seconds(path)
         from aiogram.types import FSInputFile
 
         await bot.send_voice(user_id, FSInputFile(str(path)))  # type: ignore[attr-defined]
-        return True
+        return duration_seconds
     except Exception:
         await svc.notifier.send(
             user_id,
             "Audio could not be prepared. The attempt and current item are saved; "
             "try this section again later.",
         )
-        return False
+        return None
 
 
 async def _deliver(svc: Services, bot: object | None, user_id: int, attempt: Attempt) -> None:
@@ -168,10 +173,11 @@ async def _deliver(svc: Services, bot: object | None, user_id: int, attempt: Att
     if attempt.task_type in {TaskType.LISTEN_REPEAT, TaskType.INTERVIEW}:
         if attempt.task_type is TaskType.LISTEN_REPEAT:
             await svc.notifier.send(user_id, "🔇 Слушайте. Пока не говорите.")
-        audio_sent = await _send_audio(svc, bot, user_id, attempt)
-        if attempt.task_type is TaskType.LISTEN_REPEAT and audio_sent:
+        audio_duration = await _send_audio(svc, bot, user_id, attempt)
+        if attempt.task_type is TaskType.LISTEN_REPEAT and audio_duration is not None:
+            await asyncio.sleep(audio_duration + 0.3)
             await svc.notifier.send(user_id, "🎙 Можно говорить. Повторите фразу один раз.")
-        elif attempt.task_type is TaskType.INTERVIEW and audio_sent:
+        elif attempt.task_type is TaskType.INTERVIEW and audio_duration is not None:
             svc.engine.arm_interview_deadline(
                 user_id, attempt.id, attempt.current_item, now=datetime.now(UTC)
             )

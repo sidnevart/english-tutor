@@ -60,14 +60,15 @@ Each Listen and Repeat item follows this sequence:
 1. Send `🔇 Слушайте. Пока не говорите.`
 2. Send the hidden source sentence as a Telegram voice message.
 3. End that audio with a short audible beep.
-4. Send `🎙 Можно говорить. Повторите фразу один раз.`
-5. Accept one voice response through the existing transcription and grading flow.
+4. Wait for the encoded audio duration plus a 0.3-second handoff margin.
+5. Send `🎙 Можно говорить. Повторите фразу один раз.`
+6. Accept one voice response through the existing transcription and grading flow.
 
-The beep, not a server-side delay, marks the response start. Telegram does not tell a bot when the learner starts or finishes playback, so delaying a chat message after upload would not track the real listening interval.
+Telegram does not tell a bot when the learner starts or finishes playback. The duration-based delay therefore prevents the speaking cue from arriving immediately in the normal autoplay flow, while the terminal beep remains the authoritative signal if the learner starts playback later.
 
 The experience follows the updated TOEFL iBT mechanic: the learner repeats immediately after the beep and receives no preparation pause. ETS gives 8–12 seconds to record each Listen and Repeat response, depending on the sentence. The block instructions present that range as guidance; the speaking cue stays short. The bot does not reject a Telegram recording solely because its duration exceeds the range. Existing speech metrics continue to store the actual duration.
 
-The bot adds the beep only to Listen and Repeat prompts. Interview audio and deadlines retain their current behavior. Cached audio must include the beep or be transformed deterministically before delivery, so cached and newly synthesized prompts behave alike.
+The bot adds the beep only to Listen and Repeat prompts. Interview audio and deadlines retain their current behavior. Cached audio must include the beep or be transformed deterministically before delivery, so cached and newly synthesized prompts behave alike. Newly synthesized speech is checked for excessive micro-pauses and silence; a fragmented primary result is regenerated once with the Austin voice before delivery.
 
 If audio preparation or delivery fails, the bot preserves the active item, sends the existing recovery message, and omits `Можно говорить`. Retrying the Speaking section delivers the same item again.
 
@@ -89,7 +90,7 @@ The Telegram `/check` handler extracts the email text, calls the checker, and re
 
 A small audio post-processor owns beep composition. The bot delivery function owns message order because it already coordinates prompt text and voice transport. It sends the listening cue before audio and the speaking cue only after successful voice delivery.
 
-The post-processor writes transformed prompts under the versioned cache path `audio_cache/listen-repeat-cue-v1/<task-id>/<item>.ogg`. It treats catalog audio and newly synthesized audio as immutable sources. A cache hit returns the transformed file without processing it again, which prevents duplicate beeps and separates new output from older sentence-only files.
+New synthesis is written under `audio_cache/tts-v2/<task-id>/<item>.ogg`, and the post-processor writes transformed prompts under `audio_cache/listen-repeat-cue-v2/<task-id>/<item>.ogg`. The version bump invalidates previously cached fragmented speech. The post-processor treats catalog audio and newly synthesized audio as immutable sources. A cache hit returns the transformed file without processing it again, which prevents duplicate beeps.
 
 ## 5. Data Flow
 
@@ -138,8 +139,9 @@ Automated tests must cover:
 - a successful check records canonical Writing issues but creates no plan, attempt, item, or score;
 - a failed or invalid evaluation records nothing;
 - learner and evaluator content is HTML-safe;
-- Listen and Repeat sends the listening cue, voice, and speaking cue in that order;
+- Listen and Repeat sends the listening cue, voice, waits for the audio duration plus the handoff margin, and then sends the speaking cue;
 - the speaking cue appears only after successful voice delivery;
+- fragmented primary TTS is regenerated with Austin before transcoding and delivery;
 - delivered Listen and Repeat audio contains exactly one terminal beep for both cache hits and new synthesis;
 - Interview audio receives no beep and keeps its deadline behavior;
 - audio failure preserves the current item and omits the speaking cue;

@@ -12,10 +12,12 @@ from pathlib import Path
 
 import httpx
 
+from tutor.adapters.tts.quality import analyze_audio, is_fragmented_speech
 from tutor.config import Settings
 
 _GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 _MAX_CHARS = 2000  # keep replies short; Orpheus has input limits
+_FALLBACK_VOICE = "austin"
 
 
 class GroqSynthesizer:
@@ -33,18 +35,28 @@ class GroqSynthesizer:
         wav = out_path.with_suffix(".wav")
 
         async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                f"{self._base_url}/audio/speech",
-                headers={"Authorization": f"Bearer {self._api_key}"},
-                json={
-                    "model": self.model,
-                    "voice": self.voice,
-                    "input": text[:_MAX_CHARS],
-                    "response_format": "wav",
-                },
-            )
-            resp.raise_for_status()
-            wav.write_bytes(resp.content)
+            voices = [self.voice]
+            if self.voice != _FALLBACK_VOICE:
+                voices.append(_FALLBACK_VOICE)
+            for voice in voices:
+                resp = await client.post(
+                    f"{self._base_url}/audio/speech",
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                    json={
+                        "model": self.model,
+                        "voice": voice,
+                        "input": text[:_MAX_CHARS],
+                        "response_format": "wav",
+                    },
+                )
+                resp.raise_for_status()
+                wav.write_bytes(resp.content)
+                stats = await analyze_audio(wav)
+                if not is_fragmented_speech(stats, word_count=len(text.split())):
+                    break
+            else:
+                wav.unlink(missing_ok=True)
+                raise RuntimeError("TTS generated fragmented audio with both voices")
 
         ogg = out_path if out_path.suffix == ".ogg" else out_path.with_suffix(".ogg")
         proc = await asyncio.create_subprocess_exec(

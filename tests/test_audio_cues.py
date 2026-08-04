@@ -28,7 +28,7 @@ async def test_terminal_beep_uses_versioned_cache_and_is_not_appended_twice(
     monkeypatch.setattr("tutor.adapters.tts.cues.asyncio.create_subprocess_exec", fake_subprocess)
     source = tmp_path / "sentence.wav"
     source.write_bytes(b"raw-audio")
-    output = tmp_path / "audio_cache" / "listen-repeat-cue-v1" / "task" / "0.ogg"
+    output = tmp_path / "audio_cache" / "listen-repeat-cue-v2" / "task" / "0.ogg"
     composer = AudioCueComposer()
 
     first = await composer.add_terminal_beep(source, output)
@@ -48,7 +48,7 @@ async def test_terminal_beep_failure_leaves_no_cache_file(tmp_path: Path, monkey
     monkeypatch.setattr("tutor.adapters.tts.cues.asyncio.create_subprocess_exec", failed_subprocess)
     source = tmp_path / "sentence.wav"
     source.write_bytes(b"raw-audio")
-    output = tmp_path / "listen-repeat-cue-v1" / "task" / "0.ogg"
+    output = tmp_path / "listen-repeat-cue-v2" / "task" / "0.ogg"
 
     with pytest.raises(RuntimeError, match="beep"):
         await AudioCueComposer().add_terminal_beep(source, output)

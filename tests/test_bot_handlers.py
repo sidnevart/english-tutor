@@ -35,6 +35,9 @@ class PassthroughCues:
     async def add_terminal_beep(self, source: Path, output: Path) -> Path:
         return source
 
+    async def duration_seconds(self, path: Path) -> float:
+        return 3.2
+
 
 def listen_repeat_attempt(source: Path) -> Attempt:
     return Attempt(
@@ -54,7 +57,9 @@ def listen_repeat_attempt(source: Path) -> Attempt:
     )
 
 
-async def test_listen_repeat_marks_listening_and_speaking_around_voice(tmp_path: Path) -> None:
+async def test_listen_repeat_waits_for_audio_before_speaking_cue(
+    tmp_path: Path, monkeypatch
+) -> None:
     source = tmp_path / "sentence.ogg"
     source.write_bytes(b"audio")
     events: list[tuple[str, str]] = []
@@ -65,11 +70,17 @@ async def test_listen_repeat_marks_listening_and_speaking_around_voice(tmp_path:
         synthesizer=None,
     )
 
+    async def fake_sleep(seconds: float) -> None:
+        events.append(("sleep", f"{seconds:.1f}"))
+
+    monkeypatch.setattr("tutor.bot.handlers.asyncio.sleep", fake_sleep)
+
     await _deliver(svc, RecordingBot(events), TEST_USER, listen_repeat_attempt(source))
 
-    assert events[-3:] == [
+    assert events[-4:] == [
         ("text", "🔇 Слушайте. Пока не говорите."),
         ("voice", str(source)),
+        ("sleep", "3.5"),
         ("text", "🎙 Можно говорить. Повторите фразу один раз."),
     ]
 
