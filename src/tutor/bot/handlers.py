@@ -122,13 +122,17 @@ async def _send_audio(
     text = str(texts[attempt.current_item])
     paths = attempt.payload.get("audio_paths", [])
     try:
-        if attempt.current_item < len(paths) and Path(paths[attempt.current_item]).exists():
+        if (
+            attempt.task_type is not TaskType.LISTEN_REPEAT
+            and attempt.current_item < len(paths)
+            and Path(paths[attempt.current_item]).exists()
+        ):
             path = Path(paths[attempt.current_item])
         else:
             cache_base = (
                 svc.settings.data_path
                 / "audio_cache"
-                / "tts-v2"
+                / "tts-v3"
                 / attempt.task_id
                 / f"{attempt.current_item}.wav"
             )
@@ -143,7 +147,7 @@ async def _send_audio(
             cue_path = (
                 svc.settings.data_path
                 / "audio_cache"
-                / "listen-repeat-cue-v2"
+                / "listen-repeat-cue-v3"
                 / attempt.task_id
                 / f"{attempt.current_item}.ogg"
             )

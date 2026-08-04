@@ -62,6 +62,9 @@ async def test_listen_repeat_waits_for_audio_before_speaking_cue(
 ) -> None:
     source = tmp_path / "sentence.ogg"
     source.write_bytes(b"audio")
+    cached = tmp_path / "audio_cache/tts-v3/sp-lr-01/0.ogg"
+    cached.parent.mkdir(parents=True)
+    cached.write_bytes(b"current-audio")
     events: list[tuple[str, str]] = []
     svc = SimpleNamespace(
         notifier=RecordingNotifier(events),
@@ -79,15 +82,67 @@ async def test_listen_repeat_waits_for_audio_before_speaking_cue(
 
     assert events[-4:] == [
         ("text", "🔇 Слушайте. Пока не говорите."),
-        ("voice", str(source)),
+        ("voice", str(cached)),
         ("sleep", "3.5"),
         ("text", "🎙 Можно говорить. Повторите фразу один раз."),
     ]
 
 
+async def test_listen_repeat_regenerates_audio_in_version_three_cache(
+    tmp_path: Path, monkeypatch
+) -> None:
+    synthesized_paths: list[Path] = []
+    cue_paths: list[Path] = []
+
+    class RecordingSynthesizer:
+        async def synthesize(self, text: str, out_path: Path) -> Path:
+            synthesized_paths.append(out_path)
+            output = out_path.with_suffix(".ogg")
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(b"new-speech")
+            return output
+
+    class RecordingCues:
+        async def add_terminal_beep(self, source: Path, output: Path) -> Path:
+            cue_paths.append(output)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(b"new-speech-with-beep")
+            return output
+
+        async def duration_seconds(self, path: Path) -> float:
+            return 1.0
+
+    async def skip_sleep(seconds: float) -> None:
+        pass
+
+    events: list[tuple[str, str]] = []
+    svc = SimpleNamespace(
+        notifier=RecordingNotifier(events),
+        audio_cues=RecordingCues(),
+        settings=SimpleNamespace(data_path=tmp_path),
+        synthesizer=RecordingSynthesizer(),
+    )
+    monkeypatch.setattr("tutor.bot.handlers.asyncio.sleep", skip_sleep)
+    stale_audio = tmp_path / "old-cache.ogg"
+    stale_audio.write_bytes(b"stale-speech")
+
+    await _deliver(
+        svc,
+        RecordingBot(events),
+        TEST_USER,
+        listen_repeat_attempt(stale_audio),
+    )
+
+    assert synthesized_paths == [tmp_path / "audio_cache/tts-v3/sp-lr-01/0.wav"]
+    assert cue_paths == [tmp_path / "audio_cache/listen-repeat-cue-v3/sp-lr-01/0.ogg"]
+
+
 async def test_listen_repeat_omits_speaking_cue_when_voice_delivery_fails(tmp_path: Path) -> None:
     source = tmp_path / "sentence.ogg"
     source.write_bytes(b"audio")
+    cached = tmp_path / "audio_cache/tts-v3/sp-lr-01/0.ogg"
+    cached.parent.mkdir(parents=True)
+    cached.write_bytes(b"current-audio")
     events: list[tuple[str, str]] = []
     svc = SimpleNamespace(
         notifier=RecordingNotifier(events),

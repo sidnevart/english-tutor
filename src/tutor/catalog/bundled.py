@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from tutor.catalog.listen_repeat import LISTEN_REPEAT_SENTENCES
 from tutor.catalog.validation import validate_task
 from tutor.practice.models import CatalogTask, Section, TaskType
 
@@ -185,15 +186,7 @@ def _question(stem: str, correct: str, distractors: list[str], skill: str, evide
 
 def _listen_repeat(index: int, scenario: str) -> CatalogTask:
     place = scenario.title()
-    sentences = [
-        f"Welcome to the {scenario}.",
-        "Please keep your student card with you.",
-        "The first activity begins near the main entrance.",
-        "You can ask a staff member if you need directions.",
-        "Before the session starts, place your bag beside your chair.",
-        f"Because the {scenario} is popular, arriving a few minutes early is recommended.",
-        f"After everyone has completed the {scenario}, the coordinator will explain where the follow-up materials can be found.",
-    ]
+    sentences = list(LISTEN_REPEAT_SENTENCES[scenario])
     return CatalogTask(
         id=f"sp-lr-{index:02d}",
         section=Section.SPEAKING,
@@ -707,11 +700,25 @@ class BundledCatalog:
     def validate(self) -> list[str]:
         errors: list[str] = []
         ids: set[str] = set()
+        listen_repeat_sentence_owners: dict[str, str] = {}
         for task in self.tasks:
             if task.id in ids:
                 errors.append(f"duplicate id: {task.id}")
             ids.add(task.id)
             errors.extend(f"{task.id}: {error}" for error in validate_task(task))
+            if task.task_type is TaskType.LISTEN_REPEAT:
+                sentences = task.payload.get("sentences", [])
+                for sentence in sentences if isinstance(sentences, list) else []:
+                    if not isinstance(sentence, str) or not sentence.strip():
+                        continue
+                    normalized = sentence.strip().casefold()
+                    owner = listen_repeat_sentence_owners.get(normalized)
+                    if owner is not None:
+                        errors.append(
+                            f"{task.id}: duplicate listen-repeat sentence also used by {owner}"
+                        )
+                    else:
+                        listen_repeat_sentence_owners[normalized] = task.id
         return errors
 
     def select(

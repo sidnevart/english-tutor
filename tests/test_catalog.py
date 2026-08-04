@@ -48,6 +48,38 @@ def test_catalog_payloads_match_toefl_practice_block_sizes() -> None:
             assert task.payload["rubric"]
 
 
+def test_listen_repeat_sentences_do_not_repeat_across_tasks() -> None:
+    catalog = BundledCatalog.load()
+    sentences = [
+        sentence.strip().casefold()
+        for task in catalog.tasks
+        if task.task_type is TaskType.LISTEN_REPEAT
+        for sentence in task.payload["sentences"]
+    ]
+
+    assert len(sentences) == 210
+    assert len(sentences) == len(set(sentences))
+
+
+def test_catalog_validation_rejects_normalized_listen_repeat_duplicates() -> None:
+    listen_repeat = [
+        task for task in BundledCatalog.load().tasks if task.task_type is TaskType.LISTEN_REPEAT
+    ]
+    first, second = listen_repeat[:2]
+    duplicate_payload = {
+        **second.payload,
+        "sentences": [
+            f"  {first.payload['sentences'][0].upper()}  ",
+            *second.payload["sentences"][1:],
+        ],
+    }
+    duplicate = second.model_copy(update={"payload": duplicate_payload})
+
+    errors = BundledCatalog((first, duplicate)).validate()
+
+    assert errors == [f"{duplicate.id}: duplicate listen-repeat sentence also used by {first.id}"]
+
+
 def test_selector_exhausts_unseen_tasks_before_repeating() -> None:
     catalog = BundledCatalog.load()
     seen: set[str] = set()
