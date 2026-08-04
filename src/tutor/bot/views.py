@@ -63,8 +63,9 @@ def render_prompt(entry: PlanEntry, item_index: int = 0) -> str:
         )
     if kind is TaskType.LISTEN_REPEAT:
         return (
-            f"{title}\n\nSentence {item_index + 1}/7. Listen once, "
-            "then answer with one voice message."
+            f"{title}\n\nSentence {item_index + 1}/7. Listen without speaking. "
+            "After the beep, repeat once in one voice message. TOEFL allows "
+            "about 8–12 seconds for the response."
         )
     if kind is TaskType.INTERVIEW:
         return (

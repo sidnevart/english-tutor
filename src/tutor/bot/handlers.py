@@ -15,6 +15,7 @@ from aiogram.types import CallbackQuery, Message
 
 from tutor.bot.keyboards import reset_confirm
 from tutor.bot.views import render_plan, render_prompt
+from tutor.eval.email import EmailCheckResult
 from tutor.factory import Services
 from tutor.practice.engine import ActivePracticeError, Attempt
 from tutor.practice.models import Section, TaskType
@@ -27,6 +28,7 @@ COMMANDS: list[tuple[str, str]] = [
     ("reading", "Open today's Reading block"),
     ("speaking", "Open today's Speaking block"),
     ("writing", "Open today's Writing block when due"),
+    ("check", "Review an email: /check followed by its text"),
     ("progress", "Show your learning profile"),
     ("export", "Export progress as md, csv, or json"),
     ("cancel", "Pause the active block safely"),
@@ -44,6 +46,7 @@ HELP_TEXT = (
     "/reading — Complete Words, Daily Life, or Academic Passage.\n"
     "/speaking — Listen and Repeat or Interview.\n"
     "/writing — Build a Sentence, Email, or Academic Discussion when due.\n"
+    "/check &lt;email&gt; — review an email without changing today's practice.\n"
     "/cancel — pause without deleting submitted answers.\n\n"
     "<b>Profile</b>\n"
     "/progress — completion, scores, weak skills, and issue states.\n"
@@ -132,6 +135,15 @@ async def _send_audio(svc: Services, bot: object | None, user_id: int, attempt: 
                 path = cache_base
             else:
                 path = await svc.synthesizer.synthesize(text, cache_base)
+        if attempt.task_type is TaskType.LISTEN_REPEAT:
+            cue_path = (
+                svc.settings.data_path
+                / "audio_cache"
+                / "listen-repeat-cue-v1"
+                / attempt.task_id
+                / f"{attempt.current_item}.ogg"
+            )
+            path = await svc.audio_cues.add_terminal_beep(path, cue_path)
         from aiogram.types import FSInputFile
 
         await bot.send_voice(user_id, FSInputFile(str(path)))  # type: ignore[attr-defined]
@@ -154,8 +166,12 @@ async def _deliver(svc: Services, bot: object | None, user_id: int, attempt: Att
         keyboard = _draft_keyboard(svc, attempt)
     await svc.notifier.send(user_id, render_prompt(entry, attempt.current_item), keyboard)
     if attempt.task_type in {TaskType.LISTEN_REPEAT, TaskType.INTERVIEW}:
+        if attempt.task_type is TaskType.LISTEN_REPEAT:
+            await svc.notifier.send(user_id, "🔇 Слушайте. Пока не говорите.")
         audio_sent = await _send_audio(svc, bot, user_id, attempt)
-        if attempt.task_type is TaskType.INTERVIEW and audio_sent:
+        if attempt.task_type is TaskType.LISTEN_REPEAT and audio_sent:
+            await svc.notifier.send(user_id, "🎙 Можно говорить. Повторите фразу один раз.")
+        elif attempt.task_type is TaskType.INTERVIEW and audio_sent:
             svc.engine.arm_interview_deadline(
                 user_id, attempt.id, attempt.current_item, now=datetime.now(UTC)
             )
@@ -282,6 +298,72 @@ async def _submit(
     await _after_submit(svc, bot, user_id, attempt)
 
 
+def _email_feedback_blocks(result: EmailCheckResult) -> list[str]:
+    blocks = [f"✅ <b>Email review</b>\n{_safe(result.overall_assessment, 800)}"]
+    if result.strengths:
+        strengths = "\n".join(f"• {_safe(value, 500)}" for value in result.strengths)
+        blocks.append(f"<b>Strengths</b>\n{strengths}")
+    if result.issues:
+        for issue in result.issues:
+            blocks.append(
+                "<b>Correction</b>\n"
+                f"{_safe(issue.original_excerpt, 500)} → {_safe(issue.correction, 500)}\n"
+                f"{_safe(issue.explanation, 700)}"
+            )
+    else:
+        blocks.append("<b>Corrections</b>\nNo clear errors found.")
+    return blocks
+
+
+def _pack_html_blocks(blocks: list[str], limit: int = 3800) -> list[str]:
+    messages: list[str] = []
+    current = ""
+    for block in blocks:
+        candidate = f"{current}\n\n{block}" if current else block
+        if current and len(candidate) > limit:
+            messages.append(current)
+            current = block
+        else:
+            current = candidate
+    if current:
+        messages.append(current)
+    return messages
+
+
+def _escaped_chunks(value: str, limit: int = 3500) -> list[str]:
+    chunks: list[str] = []
+    current = ""
+    for character in value:
+        escaped = html.escape(character)
+        if current and len(current) + len(escaped) > limit:
+            chunks.append(current)
+            current = ""
+        current += escaped
+    if current:
+        chunks.append(current)
+    return chunks or [""]
+
+
+async def _check_email(svc: Services, user_id: int, email_text: str) -> None:
+    email_text = email_text.strip()
+    if not email_text:
+        await svc.notifier.send(
+            user_id,
+            "Usage: <code>/check Dear Coordinator, ...</code>",
+        )
+        return
+    result = await svc.email_checker.check(user_id, email_text)
+    if result is None:
+        await svc.notifier.send(user_id, "Email check failed. Please try again later.")
+        return
+    for message in _pack_html_blocks(_email_feedback_blocks(result)):
+        await svc.notifier.send(user_id, message)
+    chunks = _escaped_chunks(result.revised_email)
+    for index, chunk in enumerate(chunks):
+        heading = "✏️ <b>Revised email</b>\n" if index == 0 else ""
+        await svc.notifier.send(user_id, f"{heading}<pre>{chunk}</pre>")
+
+
 def build_router(svc: Services, bot: object | None = None) -> Router:
     router = Router()
     router.message.filter(F.from_user.id == svc.settings.admin_user_id)
@@ -307,6 +389,12 @@ def build_router(svc: Services, bot: object | None = None) -> Router:
     @router.message(Command("writing"))
     async def on_writing(message: Message) -> None:
         await _open_section(svc, bot, message.from_user.id, Section.WRITING)
+
+    @router.message(Command("check"))
+    async def on_check(message: Message) -> None:
+        parts = (message.text or "").split(maxsplit=1)
+        email_text = parts[1] if len(parts) == 2 else ""
+        await _check_email(svc, message.from_user.id, email_text)
 
     @router.message(Command("progress"))
     async def on_progress(message: Message) -> None:

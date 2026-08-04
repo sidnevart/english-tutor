@@ -30,6 +30,7 @@ Training scores are practice estimates, not official TOEFL section scores.
 | `/reading` | Open today's Reading block |
 | `/speaking` | Open today's Speaking block |
 | `/writing` | Open Writing when it is due |
+| `/check <email>` | Review an email without changing today's practice |
 | `/progress` | Show completion, task results, skills, and issue states |
 | `/export [md\|csv\|json]` | Export the latest learning profile |
 | `/cancel` | Pause the active block without deleting answers |

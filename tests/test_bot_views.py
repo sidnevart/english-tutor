@@ -19,6 +19,7 @@ def test_only_focused_toefl_commands_remain() -> None:
         "reading",
         "speaking",
         "writing",
+        "check",
         "progress",
         "export",
         "cancel",
@@ -27,6 +28,7 @@ def test_only_focused_toefl_commands_remain() -> None:
     }
     assert "/speak —" not in HELP_TEXT
     assert "/coach" not in HELP_TEXT
+    assert "/check" in HELP_TEXT
     assert "Anki" not in HELP_TEXT
 
 

@@ -10,10 +10,12 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 
+from tutor.adapters.tts.cues import AudioCueComposer
 from tutor.catalog import BundledCatalog
 from tutor.catalog.replenisher import CatalogReplenisher, HttpSourceFetcher
 from tutor.config import Settings
 from tutor.db.repository import Repository
+from tutor.eval.email import StandaloneEmailChecker
 from tutor.eval.rubric import RubricEvaluator
 from tutor.interfaces import LLMClient, Notifier, Synthesizer, Transcriber
 from tutor.practice.engine import PracticeEngine
@@ -98,11 +100,13 @@ class Services:
     notifier: Notifier
     transcriber: Transcriber
     synthesizer: Synthesizer
+    audio_cues: AudioCueComposer
     catalog: BundledCatalog
     planner: DailyPlanner
     tracker: ProgressTracker
     engine: PracticeEngine
     evaluator: RubricEvaluator
+    email_checker: StandaloneEmailChecker
     replenisher: CatalogReplenisher
 
 
@@ -116,6 +120,7 @@ def build_services(settings: Settings, conn: sqlite3.Connection) -> Services:
     tracker.migrate_legacy_errors()
     engine = PracticeEngine(repo, tracker)
     evaluator = RubricEvaluator(repo, llm, tracker)
+    email_checker = StandaloneEmailChecker(repo, llm, tracker)
     replenisher = CatalogReplenisher(
         repo, llm, HttpSourceFetcher(), synthesizer, settings.data_path / "catalog_audio"
     )
@@ -126,10 +131,12 @@ def build_services(settings: Settings, conn: sqlite3.Connection) -> Services:
         notifier=build_notifier(settings),
         transcriber=build_transcriber(settings),
         synthesizer=synthesizer,
+        audio_cues=AudioCueComposer(),
         catalog=catalog,
         planner=planner,
         tracker=tracker,
         engine=engine,
         evaluator=evaluator,
+        email_checker=email_checker,
         replenisher=replenisher,
     )
